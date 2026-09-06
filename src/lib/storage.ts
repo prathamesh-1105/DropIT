@@ -1,8 +1,28 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import os from 'os';
 
-const UPLOAD_BASE_DIR = path.join(process.cwd(), 'uploads');
+function getWritableUploadsDir(): string {
+  const localDir = path.join(process.cwd(), 'uploads');
+  try {
+    if (!fsSync.existsSync(localDir)) {
+      fsSync.mkdirSync(localDir, { recursive: true });
+    }
+    const testFile = path.join(localDir, `.write_test_${Math.random().toString(36).substring(2, 6)}`);
+    fsSync.writeFileSync(testFile, '1');
+    fsSync.unlinkSync(testFile);
+    return localDir;
+  } catch (err) {
+    const tmpDir = path.join(os.tmpdir(), 'dropit_app', 'uploads');
+    if (!fsSync.existsSync(tmpDir)) {
+      fsSync.mkdirSync(tmpDir, { recursive: true });
+    }
+    return tmpDir;
+  }
+}
+
+const UPLOAD_BASE_DIR = getWritableUploadsDir();
 const ORIGINALS_DIR = path.join(UPLOAD_BASE_DIR, 'originals');
 const PREVIEWS_DIR = path.join(UPLOAD_BASE_DIR, 'previews');
 const CHUNKS_DIR = path.join(UPLOAD_BASE_DIR, 'chunks');

@@ -134,7 +134,13 @@ export default function HomePage() {
         }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        data = {};
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to create room');
 
       localStorage.setItem(`drop_member_${data.roomCode}`, data.creatorMemberId);
@@ -167,7 +173,13 @@ export default function HomePage() {
         body: JSON.stringify({ displayName: name.trim() }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        data = {};
+      }
       if (!res.ok) throw new Error(data.error || 'Room not found');
 
       localStorage.setItem(`drop_member_${data.roomCode}`, data.memberId);

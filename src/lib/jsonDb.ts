@@ -1,12 +1,28 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function getWritableDataDir(): string {
+  const localDir = path.join(process.cwd(), 'data');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    const testFile = path.join(localDir, `.write_test_${Math.random().toString(36).substring(2, 6)}`);
+    fs.writeFileSync(testFile, '1');
+    fs.unlinkSync(testFile);
+    return localDir;
+  } catch (err) {
+    const tmpDir = path.join(os.tmpdir(), 'dropit_app', 'data');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+    return tmpDir;
+  }
 }
+
+const DATA_DIR = getWritableDataDir();
+const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 export interface RoomRecord {
   id: string;

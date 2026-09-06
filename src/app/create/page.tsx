@@ -63,7 +63,13 @@ export default function CreateRoomPage() {
         }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        data = {};
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to create room');
 
       localStorage.setItem(`drop_member_${data.roomCode}`, data.creatorMemberId);

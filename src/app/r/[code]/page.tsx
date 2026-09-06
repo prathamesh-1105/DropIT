@@ -192,7 +192,13 @@ export default function RoomPage({
         body: JSON.stringify({ displayName: joinNameInput.trim() }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        data = {};
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to join room');
 
       localStorage.setItem(`drop_member_${data.roomCode}`, data.memberId);
