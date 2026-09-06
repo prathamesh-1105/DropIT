@@ -1,0 +1,56 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Room {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  createdAt   DateTime @default(now())
+  createdBy   String?
+  members     Member[]
+  mediaItems  Media[]
+}
+
+model Member {
+  id          String   @id @default(uuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  displayName String
+  joinedAt    DateTime @default(now())
+  mediaItems  Media[]
+}
+
+model Media {
+  id               String   @id @default(uuid())
+  roomId           String
+  room             Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  memberId         String
+  member           Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  originalFilename String
+  mimeType         String
+  size             BigInt
+  storagePath      String
+  previewPath      String?
+  checksum         String   @default("")
+  width            Int?
+  height           Int?
+  duration         Float?
+  createdAt        DateTime @default(now())
+}
+
+model UploadChunk {
+  id           String   @id @default(uuid())
+  uploadId     String
+  chunkIndex   Int
+  totalChunks  Int
+  storagePath  String
+  createdAt    DateTime @default(now())
+
+  @@unique([uploadId, chunkIndex])
+}
