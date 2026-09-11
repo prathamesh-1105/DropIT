@@ -1,7 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Rubik+Mono+One&family=Syne:wght@800;900&family=Unbounded:wght@800;900&family=Plus+Jakarta+Sans:wght@800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Outfit:wght@600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
-/* Apple iOS & SF Pro Typography System with Milker Display Font */
+/* Modern DropIT Design & Typography System */
 @layer base {
   :root {
     --bg-main: #f8fafc;
@@ -30,8 +30,10 @@
   }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     min-height: 100vh;
     transition: background-image 0.4s ease, background-color 0.4s ease, color 0.3s ease;
     background: #f8fafc url('/bg-light.png') no-repeat center center / cover fixed;
@@ -44,13 +46,18 @@
   }
 }
 
-/* Bold Milker Display Font Class for Main Sections */
+/* Modern Typography Classes */
+.font-sans {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 .font-display {
-  font-family: 'Milker', 'Dela Gothic One', 'Rubik Mono One', 'Unbounded', 'Syne', 'Plus Jakarta Sans', -apple-system, sans-serif;
-  font-weight: 900;
-  letter-spacing: 0.06em;
-  word-spacing: 0.18em;
-  text-transform: uppercase;
+  font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
 }
 
 /* Apple iOS Glassmorphism Card */

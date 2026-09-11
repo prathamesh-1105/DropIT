@@ -61,23 +61,63 @@ interface DbSchema {
   media: MediaRecord[];
 }
 
+let dbCache: DbSchema | null = null;
+
 function readDb(): DbSchema {
+  if (dbCache) {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const raw = fs.readFileSync(DB_FILE, 'utf-8');
+        if (raw && raw.trim().length > 0) {
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.rooms)) {
+            dbCache = parsed;
+            return dbCache!;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Warning reading db.json, serving from in-memory cache:', err);
+    }
+    return dbCache!;
+  }
+
   if (!fs.existsSync(DB_FILE)) {
     const initial: DbSchema = { rooms: [], members: [], media: [] };
-    fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+    writeDb(initial);
+    dbCache = initial;
     return initial;
   }
+
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.rooms)) {
+      dbCache = parsed;
+      return dbCache!;
+    }
   } catch (err) {
-    console.error('Error reading jsonDb:', err);
-    return { rooms: [], members: [], media: [] };
+    console.error('Error parsing jsonDb file, initializing fallback cache:', err);
   }
+
+  dbCache = { rooms: [], members: [], media: [] };
+  return dbCache;
 }
 
 function writeDb(data: DbSchema) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  dbCache = data;
+  const tempPath = `${DB_FILE}.${Math.random().toString(36).substring(2, 8)}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+    try {
+      fs.renameSync(tempPath, DB_FILE);
+    } catch (renameErr) {
+      fs.copyFileSync(tempPath, DB_FILE);
+      fs.unlinkSync(tempPath);
+    }
+  } catch (err) {
+    console.error('Error atomically writing jsonDb:', err);
+  }
 }
 
 export const jsonDb = {

@@ -39,7 +39,16 @@ export async function GET(
 
       roomEvents.on(`room:${room.id}`, eventListener);
 
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': ping\n\n'));
+        } catch (e) {
+          clearInterval(heartbeat);
+        }
+      }, 25000);
+
       req.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
         roomEvents.off(`room:${room.id}`, eventListener);
       });
     },
