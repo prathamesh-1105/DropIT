@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 
 export async function GET(
   req: Request,
@@ -9,7 +9,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const media = jsonDb.findMediaById(id);
+    const media = await supabaseDb.findMediaById(id);
 
     if (!media) {
       return new NextResponse('Media not found', { status: 404 });

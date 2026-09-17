@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 
 function generateRoomCode(): string {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -24,13 +24,13 @@ export async function POST(req: Request) {
     }
 
     let code = generateRoomCode();
-    let existing = jsonDb.findRoomByCode(code);
+    let existing = await supabaseDb.findRoomByCode(code);
     while (existing) {
       code = generateRoomCode();
-      existing = jsonDb.findRoomByCode(code);
+      existing = await supabaseDb.findRoomByCode(code);
     }
 
-    const { room, creatorMember } = jsonDb.createRoom(
+    const { room, creatorMember } = await supabaseDb.createRoom(
       roomName.trim(),
       code,
       creatorName.trim()

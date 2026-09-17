@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 
 export async function GET(
   req: Request,
@@ -7,7 +7,7 @@ export async function GET(
 ) {
   try {
     const { code } = await params;
-    const result = jsonDb.findRoomByCode(code);
+    const result = await supabaseDb.findRoomByCode(code);
 
     if (!result) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });

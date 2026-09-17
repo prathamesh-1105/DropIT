@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 import { broadcastRoomEvent } from '@/lib/events';
 import fs from 'fs/promises';
 import path from 'path';
@@ -13,7 +13,7 @@ export async function POST(
     const body = await req.json();
     const { action, memberId, newName, mediaId, mediaIds } = body;
 
-    const result = jsonDb.findRoomByCode(code);
+    const result = await supabaseDb.findRoomByCode(code);
     if (!result) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });
     }
@@ -21,7 +21,7 @@ export async function POST(
     const { room } = result;
 
     if (action === 'DELETE_ROOM') {
-      jsonDb.deleteRoom(room.id);
+      await supabaseDb.deleteRoom(room.id);
 
       try {
         const uploadDir = path.join(process.cwd(), 'uploads');
@@ -41,7 +41,7 @@ export async function POST(
     }
 
     if (action === 'DELETE_MEDIA' && mediaId) {
-      const deleted = jsonDb.deleteMedia(mediaId);
+      const deleted = await supabaseDb.deleteMedia(mediaId);
       if (deleted) {
         try {
           if (deleted.storagePath) await fs.unlink(deleted.storagePath).catch(() => {});
@@ -61,7 +61,7 @@ export async function POST(
     }
 
     if (action === 'DELETE_MULTIPLE_MEDIA' && Array.isArray(mediaIds) && mediaIds.length > 0) {
-      const deletedList = jsonDb.deleteMultipleMedia(mediaIds);
+      const deletedList = await supabaseDb.deleteMultipleMedia(mediaIds);
       await Promise.all(
         deletedList.map(async (item) => {
           if (item.storagePath) await fs.unlink(item.storagePath).catch(() => {});
@@ -79,7 +79,7 @@ export async function POST(
     }
 
     if (action === 'REMOVE_MEMBER' && memberId) {
-      jsonDb.removeMember(memberId);
+      await supabaseDb.removeMember(memberId);
 
       broadcastRoomEvent({
         roomId: room.id,
@@ -92,7 +92,7 @@ export async function POST(
     }
 
     if (action === 'RENAME_ROOM' && newName) {
-      jsonDb.updateRoomName(room.id, newName.trim());
+      await supabaseDb.updateRoomName(room.id, newName.trim());
 
       broadcastRoomEvent({
         roomId: room.id,

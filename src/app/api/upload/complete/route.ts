@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 import {
   getChunkFilePath,
   getOriginalFilePath,
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
     // Non-blocking preview generation in background for maximum speed
     generatePreview(destinationPath, previewPath, mimeType).catch((e) => console.error(e));
 
-    const media = jsonDb.addMedia({
+    const media = await supabaseDb.addMedia({
       id: fileId,
       roomId,
       memberId,
@@ -93,8 +93,9 @@ export async function POST(req: Request) {
       duration: duration ? Number(duration) : undefined,
     });
 
-    const roomRes = jsonDb.findRoomById(roomId);
-    const memberName = roomRes ? jsonDb.findRoomByCode(roomRes.code)?.members.find((m) => m.id === memberId)?.displayName || 'Someone' : 'Someone';
+    const roomRes = await supabaseDb.findRoomById(roomId);
+    const roomDetails = roomRes ? await supabaseDb.findRoomByCode(roomRes.code) : null;
+    const memberName = roomDetails?.members.find((m) => m.id === memberId)?.displayName || 'Someone';
 
     broadcastRoomEvent({
       roomId,

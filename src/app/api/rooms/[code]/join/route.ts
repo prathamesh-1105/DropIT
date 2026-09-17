@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 import { broadcastRoomEvent } from '@/lib/events';
 
 export async function POST(
@@ -17,13 +17,13 @@ export async function POST(
       );
     }
 
-    const result = jsonDb.findRoomByCode(code);
+    const result = await supabaseDb.findRoomByCode(code);
     if (!result) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });
     }
 
     const { room } = result;
-    const member = jsonDb.addMember(room.id, displayName.trim());
+    const member = await supabaseDb.addMember(room.id, displayName.trim());
 
     broadcastRoomEvent({
       roomId: room.id,

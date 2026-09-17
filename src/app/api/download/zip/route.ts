@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { jsonDb } from '@/lib/jsonDb';
+import { supabaseDb } from '@/lib/supabase';
 import { createZeroLossZipBuffer, ZipMediaItem } from '@/lib/zip';
 
 export async function POST(req: Request) {
@@ -10,12 +10,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Room ID is required' }, { status: 400 });
     }
 
-    const room = jsonDb.findRoomById(roomId);
+    const room = await supabaseDb.findRoomById(roomId);
     if (!room) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 });
     }
 
-    const roomData = jsonDb.findRoomByCode(room.code);
+    const roomData = await supabaseDb.findRoomByCode(room.code);
     if (!roomData) {
       return NextResponse.json({ error: 'Room details not found' }, { status: 404 });
     }
