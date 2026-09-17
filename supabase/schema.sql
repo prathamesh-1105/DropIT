@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rooms_code ON rooms(code);
+ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;
 
 -- 2. Members Table
 CREATE TABLE IF NOT EXISTS members (
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_room_id ON members(room_id);
+ALTER TABLE members DISABLE ROW LEVEL SECURITY;
 
 -- 3. Media Table
 CREATE TABLE IF NOT EXISTS media (
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX IF NOT EXISTS idx_media_room_id ON media(room_id);
 CREATE INDEX IF NOT EXISTS idx_media_member_id ON media(member_id);
+ALTER TABLE media DISABLE ROW LEVEL SECURITY;
 
 -- 4. Upload Chunks Table (for chunked uploading)
 CREATE TABLE IF NOT EXISTS upload_chunks (
@@ -53,17 +56,9 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
   CONSTRAINT unique_upload_chunk UNIQUE (upload_id, chunk_index)
 );
 
+ALTER TABLE upload_chunks DISABLE ROW LEVEL SECURITY;
+
 -- 5. Storage Bucket setup (dropit-media)
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('dropit-media', 'dropit-media', true)
 ON CONFLICT (id) DO NOTHING;
-
--- Allow public access to dropit-media bucket
-CREATE POLICY "Public Read Access" ON storage.objects
-  FOR SELECT USING (bucket_id = 'dropit-media');
-
-CREATE POLICY "Public Insert Access" ON storage.objects
-  FOR INSERT WITH CHECK (bucket_id = 'dropit-media');
-
-CREATE POLICY "Public Delete Access" ON storage.objects
-  FOR DELETE USING (bucket_id = 'dropit-media');
