@@ -19,83 +19,57 @@ const isSupabaseConfigured = () => {
 };
 
 export const supabaseDb = {
-  createRoom: async (name: string, code: string, createdBy: string) => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.createRoom(name, code, createdBy);
+  createRoom: async (name: string, code: string, createdBy: string, tokenHash?: string) => {
+    // 1. Create locally in jsonDb instantly (< 1ms)
+    const result = jsonDb.createRoom(name, code, createdBy, tokenHash);
+
+    // 2. Parallel non-blocking sync to Supabase cloud
+    if (isSupabaseConfigured()) {
+      Promise.all([
+        supabase.from('rooms').insert({
+          id: result.room.id,
+          code: result.room.code,
+          name: result.room.name,
+          created_at: result.room.createdAt,
+          created_by: result.room.createdBy,
+        }),
+        supabase.from('members').insert({
+          id: result.creatorMember.id,
+          room_id: result.creatorMember.roomId,
+          display_name: result.creatorMember.displayName,
+          token_hash: result.creatorMember.tokenHash,
+          role: result.creatorMember.role,
+          joined_at: result.creatorMember.joinedAt,
+        }),
+      ]).catch((err) => {
+        console.warn('Background Supabase createRoom sync error:', err);
+      });
     }
 
-    const roomId = Math.random().toString(36).substring(2, 11);
-    const memberId = Math.random().toString(36).substring(2, 11);
-
-    const room: RoomRecord = {
-      id: roomId,
-      code: code.toUpperCase().trim(),
-      name,
-      createdAt: new Date().toISOString(),
-      createdBy,
-    };
-
-    const creatorMember: MemberRecord = {
-      id: memberId,
-      roomId,
-      displayName: createdBy,
-      joinedAt: new Date().toISOString(),
-    };
-
-    const { error: roomErr } = await supabase.from('rooms').insert({
-      id: room.id,
-      code: room.code,
-      name: room.name,
-      created_at: room.createdAt,
-      created_by: room.createdBy,
-    });
-
-    if (roomErr) {
-      console.error('Supabase createRoom error:', roomErr);
-      return jsonDb.createRoom(name, code, createdBy);
-    }
-
-    const { error: memberErr } = await supabase.from('members').insert({
-      id: creatorMember.id,
-      room_id: creatorMember.roomId,
-      display_name: creatorMember.displayName,
-      joined_at: creatorMember.joinedAt,
-    });
-
-    if (memberErr) {
-      console.error('Supabase createMember error:', memberErr);
-    }
-
-    return { room, creatorMember };
+    return result;
   },
 
   findRoomByCode: async (code: string) => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.findRoomByCode(code);
+    if (isSupabaseConfigured()) {
+      try {
+        const formattedCode = code.toUpperCase().trim();
+        const cleanCode = formattedCode.replace(/-/g, '');
+
+        const { data: roomData, error } = await supabase
+          .from('rooms')
+          .select('*')
+          .or(`code.eq.${formattedCode},code.eq.${cleanCode}`)
+          .limit(1);
+
+        if (!error && roomData && roomData.length > 0) {
+          const details = await supabaseDb.getRoomDetails(roomData[0]);
+          if (details) return details;
+        }
+      } catch (err) {
+        console.warn('Supabase findRoomByCode error, using jsonDb fallback:', err);
+      }
     }
-
-    const formattedCode = code.toUpperCase().trim();
-    const cleanCode = formattedCode.replace(/-/g, '');
-
-    const { data: roomData, error: roomErr } = await supabase
-      .from('rooms')
-      .select('*')
-      .or(`code.eq.${formattedCode},code.eq.${cleanCode}`)
-      .single();
-
-    if (roomErr || !roomData) {
-      // Fallback query matching formatted / unformatted
-      const { data: allRooms } = await supabase.from('rooms').select('*');
-      const room = allRooms?.find(
-        (r) =>
-          r.code === formattedCode ||
-          r.code.replace(/-/g, '') === cleanCode
-      );
-      if (!room) return null;
-      return await supabaseDb.getRoomDetails(room);
-    }
-
-    return await supabaseDb.getRoomDetails(roomData);
+    return jsonDb.findRoomByCode(code);
   },
 
   getRoomDetails: async (roomData: any) => {
@@ -107,253 +81,370 @@ export const supabaseDb = {
       createdBy: roomData.created_by,
     };
 
-    const { data: membersData } = await supabase
-      .from('members')
-      .select('*')
-      .eq('room_id', room.id);
+    let members: MemberRecord[] = [];
+    let mediaItems: MediaRecord[] = [];
 
-    const { data: mediaData } = await supabase
-      .from('media')
-      .select('*')
-      .eq('room_id', room.id);
+    try {
+      const { data: membersData } = await supabase
+        .from('members')
+        .select('*')
+        .eq('room_id', room.id);
 
-    const members: MemberRecord[] = (membersData || []).map((m: any) => ({
-      id: m.id,
-      roomId: m.room_id,
-      displayName: m.display_name,
-      joinedAt: m.joined_at,
-    }));
+      members = (membersData || []).map((m: any) => ({
+        id: m.id,
+        roomId: m.room_id,
+        displayName: m.display_name,
+        tokenHash: m.token_hash || '',
+        role: m.role || 'MEMBER',
+        joinedAt: m.joined_at,
+      }));
 
-    const mediaItems: MediaRecord[] = (mediaData || []).map((m: any) => ({
-      id: m.id,
-      roomId: m.room_id,
-      memberId: m.member_id,
-      originalFilename: m.original_filename,
-      mimeType: m.mime_type,
-      size: Number(m.size),
-      storagePath: m.storage_path,
-      previewPath: m.preview_path,
-      checksum: m.checksum || '',
-      width: m.width || undefined,
-      height: m.height || undefined,
-      duration: m.duration || undefined,
-      createdAt: m.created_at,
-    }));
+      const { data: mediaData } = await supabase
+        .from('media')
+        .select('*')
+        .eq('room_id', room.id);
+
+      mediaItems = (mediaData || []).map((m: any) => ({
+        id: m.id,
+        roomId: m.room_id,
+        memberId: m.member_id,
+        originalFilename: m.original_filename,
+        mimeType: m.mime_type,
+        size: Number(m.size),
+        storagePath: m.storage_path,
+        previewPath: m.preview_path,
+        checksum: m.checksum || '',
+        width: m.width || undefined,
+        height: m.height || undefined,
+        duration: m.duration || undefined,
+        createdAt: m.created_at,
+      }));
+    } catch (err) {
+      console.warn('Error reading room details from Supabase:', err);
+    }
+
+    // Merge jsonDb members & media items so no data is ever lost if Supabase has RLS or connection limits
+    const jsonRes = jsonDb.findRoomById(room.id) ? jsonDb.findRoomByCode(room.code) : null;
+    if (jsonRes) {
+      const memberMap = new Map<string, MemberRecord>();
+      members.forEach((m) => memberMap.set(m.id, m));
+      jsonRes.members.forEach((m) => {
+        if (!memberMap.has(m.id)) memberMap.set(m.id, m);
+      });
+      members = Array.from(memberMap.values());
+
+      const mediaMap = new Map<string, MediaRecord>();
+      mediaItems.forEach((m) => mediaMap.set(m.id, m));
+      jsonRes.mediaItems.forEach((m) => {
+        if (!mediaMap.has(m.id)) mediaMap.set(m.id, m);
+      });
+      mediaItems = Array.from(mediaMap.values());
+    }
 
     return { room, members, mediaItems };
   },
 
-  findRoomById: async (id: string): Promise<RoomRecord | null> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.findRoomById(id);
+  findMembersByRoomId: async (roomId: string): Promise<MemberRecord[]> => {
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase.from('members').select('*').eq('room_id', roomId);
+        if (!error && data && data.length > 0) {
+          return data.map((m: any) => ({
+            id: m.id,
+            roomId: m.room_id,
+            displayName: m.display_name,
+            tokenHash: m.token_hash || '',
+            role: m.role || 'MEMBER',
+            joinedAt: m.joined_at,
+          }));
+        }
+      } catch (err) {
+        console.warn('Supabase findMembersByRoomId error:', err);
+      }
     }
+    return jsonDb.findMembersByRoomId(roomId);
+  },
 
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('id', id)
-      .single();
+  findRoomById: async (id: string): Promise<RoomRecord | null> => {
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('id', id)
+          .single();
 
-    if (error || !data) return null;
-
-    return {
-      id: data.id,
-      code: data.code,
-      name: data.name,
-      createdAt: data.created_at,
-      createdBy: data.created_by,
-    };
+        if (!error && data) {
+          return {
+            id: data.id,
+            code: data.code,
+            name: data.name,
+            createdAt: data.created_at,
+            createdBy: data.created_by,
+          };
+        }
+      } catch (err) {
+        console.warn('Supabase findRoomById error:', err);
+      }
+    }
+    return jsonDb.findRoomById(id);
   },
 
   deleteRoom: async (roomId: string) => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.deleteRoom(roomId);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase.from('rooms').delete().eq('id', roomId);
+      } catch (e) {}
     }
-
-    await supabase.from('rooms').delete().eq('id', roomId);
+    jsonDb.deleteRoom(roomId);
   },
 
   updateRoomName: async (roomId: string, newName: string) => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.updateRoomName(roomId, newName);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase.from('rooms').update({ name: newName }).eq('id', roomId);
+      } catch (e) {}
     }
-
-    await supabase.from('rooms').update({ name: newName }).eq('id', roomId);
+    jsonDb.updateRoomName(roomId, newName);
   },
 
-  addMember: async (roomId: string, displayName: string): Promise<MemberRecord> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.addMember(roomId, displayName);
+  addMember: async (
+    roomId: string,
+    displayName: string,
+    tokenHash?: string,
+    role: 'OWNER' | 'MEMBER' = 'MEMBER'
+  ): Promise<MemberRecord> => {
+    if (isSupabaseConfigured()) {
+      try {
+        // Ensure room exists in Supabase rooms table first
+        const roomInDb = await jsonDb.findRoomById(roomId);
+        if (roomInDb) {
+          try {
+            await supabase.from('rooms').upsert({
+              id: roomInDb.id,
+              code: roomInDb.code,
+              name: roomInDb.name,
+              created_at: roomInDb.createdAt,
+              created_by: roomInDb.createdBy,
+            });
+          } catch (e) {}
+        }
+
+        const { data: existing } = await supabase
+          .from('members')
+          .select('*')
+          .eq('room_id', roomId)
+          .ilike('display_name', displayName)
+          .single();
+
+        if (existing) {
+          if (tokenHash || role) {
+            await supabase
+              .from('members')
+              .update({
+                ...(tokenHash ? { token_hash: tokenHash } : {}),
+                ...(role ? { role } : {}),
+              })
+              .eq('id', existing.id);
+          }
+          const rec = {
+            id: existing.id,
+            roomId: existing.room_id,
+            displayName: existing.display_name,
+            tokenHash: tokenHash || existing.token_hash,
+            role: role || existing.role,
+            joinedAt: existing.joined_at,
+          };
+          jsonDb.addMember(roomId, displayName, tokenHash, role);
+          return rec;
+        }
+
+        const newMember: MemberRecord = {
+          id: Math.random().toString(36).substring(2, 11),
+          roomId,
+          displayName,
+          tokenHash: tokenHash || '',
+          role,
+          joinedAt: new Date().toISOString(),
+        };
+
+        const { error } = await supabase.from('members').insert({
+          id: newMember.id,
+          room_id: newMember.roomId,
+          display_name: newMember.displayName,
+          token_hash: newMember.tokenHash,
+          role: newMember.role,
+          joined_at: newMember.joinedAt,
+        });
+
+        if (!error) {
+          jsonDb.addMember(roomId, displayName, tokenHash, role);
+          return newMember;
+        } else {
+          console.warn('Supabase addMember insert failed, using jsonDb:', error);
+        }
+      } catch (err) {
+        console.warn('Supabase addMember error:', err);
+      }
     }
 
-    // Check if member with name exists
-    const { data: existing } = await supabase
-      .from('members')
-      .select('*')
-      .eq('room_id', roomId)
-      .ilike('display_name', displayName)
-      .single();
-
-    if (existing) {
-      return {
-        id: existing.id,
-        roomId: existing.room_id,
-        displayName: existing.display_name,
-        joinedAt: existing.joined_at,
-      };
-    }
-
-    const newMember: MemberRecord = {
-      id: Math.random().toString(36).substring(2, 11),
-      roomId,
-      displayName,
-      joinedAt: new Date().toISOString(),
-    };
-
-    await supabase.from('members').insert({
-      id: newMember.id,
-      room_id: newMember.roomId,
-      display_name: newMember.displayName,
-      joined_at: newMember.joinedAt,
-    });
-
-    return newMember;
+    return jsonDb.addMember(roomId, displayName, tokenHash, role);
   },
 
   removeMember: async (memberId: string) => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.removeMember(memberId);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase.from('members').delete().eq('id', memberId);
+      } catch (e) {}
     }
-
-    await supabase.from('members').delete().eq('id', memberId);
+    jsonDb.removeMember(memberId);
   },
 
   addMedia: async (media: Omit<MediaRecord, 'createdAt'>): Promise<MediaRecord> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.addMedia(media);
-    }
-
     const record: MediaRecord = {
       ...media,
       createdAt: new Date().toISOString(),
     };
 
-    await supabase.from('media').insert({
-      id: record.id,
-      room_id: record.roomId,
-      member_id: record.memberId,
-      original_filename: record.originalFilename,
-      mime_type: record.mimeType,
-      size: record.size,
-      storage_path: record.storagePath,
-      preview_path: record.previewPath,
-      checksum: record.checksum,
-      width: record.width,
-      height: record.height,
-      duration: record.duration,
-      created_at: record.createdAt,
-    });
+    if (isSupabaseConfigured()) {
+      try {
+        // Ensure room and member exist in Supabase tables before inserting media
+        const roomInDb = await jsonDb.findRoomById(media.roomId);
+        if (roomInDb) {
+          try {
+            await supabase.from('rooms').upsert({
+              id: roomInDb.id,
+              code: roomInDb.code,
+              name: roomInDb.name,
+              created_at: roomInDb.createdAt,
+              created_by: roomInDb.createdBy,
+            });
+          } catch (e) {}
+        }
 
+        const membersInDb = jsonDb.findMembersByRoomId(media.roomId);
+        const memberInDb = membersInDb.find((m) => m.id === media.memberId);
+        if (memberInDb) {
+          try {
+            await supabase.from('members').upsert({
+              id: memberInDb.id,
+              room_id: memberInDb.roomId,
+              display_name: memberInDb.displayName,
+              token_hash: memberInDb.tokenHash,
+              role: memberInDb.role,
+              joined_at: memberInDb.joinedAt,
+            });
+          } catch (e) {}
+        }
+
+        const { error } = await supabase.from('media').insert({
+          id: record.id,
+          room_id: record.roomId,
+          member_id: record.memberId,
+          original_filename: record.originalFilename,
+          mime_type: record.mimeType,
+          size: record.size,
+          storage_path: record.storagePath,
+          preview_path: record.previewPath,
+          checksum: record.checksum,
+          width: record.width,
+          height: record.height,
+          duration: record.duration,
+          created_at: record.createdAt,
+        });
+
+        if (error) {
+          console.warn('Supabase addMedia insert error, syncing with jsonDb:', error);
+        }
+      } catch (err) {
+        console.warn('Supabase addMedia error, syncing with jsonDb:', err);
+      }
+    }
+
+    jsonDb.addMedia(record);
     return record;
   },
 
   findMediaById: async (id: string): Promise<MediaRecord | null> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.findMediaById(id);
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('media')
+          .select('*')
+          .eq('id', id)
+          .single();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            roomId: data.room_id,
+            memberId: data.member_id,
+            originalFilename: data.original_filename,
+            mimeType: data.mime_type,
+            size: Number(data.size),
+            storagePath: data.storage_path,
+            previewPath: data.preview_path,
+            checksum: data.checksum || '',
+            width: data.width || undefined,
+            height: data.height || undefined,
+            duration: data.duration || undefined,
+            createdAt: data.created_at,
+          };
+        }
+      } catch (err) {
+        console.warn('Supabase findMediaById error:', err);
+      }
     }
-
-    const { data, error } = await supabase
-      .from('media')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error || !data) return null;
-
-    return {
-      id: data.id,
-      roomId: data.room_id,
-      memberId: data.member_id,
-      originalFilename: data.original_filename,
-      mimeType: data.mime_type,
-      size: Number(data.size),
-      storagePath: data.storage_path,
-      previewPath: data.preview_path,
-      checksum: data.checksum || '',
-      width: data.width || undefined,
-      height: data.height || undefined,
-      duration: data.duration || undefined,
-      createdAt: data.created_at,
-    };
+    return jsonDb.findMediaById(id);
   },
 
   findMediaByRoom: async (roomId: string): Promise<MediaRecord[]> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.findMediaByRoom(roomId);
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('media')
+          .select('*')
+          .eq('room_id', roomId);
+
+        if (!error && data && data.length > 0) {
+          return data.map((m: any) => ({
+            id: m.id,
+            roomId: m.room_id,
+            memberId: m.member_id,
+            originalFilename: m.original_filename,
+            mimeType: m.mime_type,
+            size: Number(m.size),
+            storagePath: m.storage_path,
+            previewPath: m.preview_path,
+            checksum: m.checksum || '',
+            width: m.width || undefined,
+            height: m.height || undefined,
+            duration: m.duration || undefined,
+            createdAt: m.created_at,
+          }));
+        }
+      } catch (err) {
+        console.warn('Supabase findMediaByRoom error:', err);
+      }
     }
-
-    const { data, error } = await supabase
-      .from('media')
-      .select('*')
-      .eq('room_id', roomId);
-
-    if (error || !data) return [];
-
-    return data.map((m: any) => ({
-      id: m.id,
-      roomId: m.room_id,
-      memberId: m.member_id,
-      originalFilename: m.original_filename,
-      mimeType: m.mime_type,
-      size: Number(m.size),
-      storagePath: m.storage_path,
-      previewPath: m.preview_path,
-      checksum: m.checksum || '',
-      width: m.width || undefined,
-      height: m.height || undefined,
-      duration: m.duration || undefined,
-      createdAt: m.created_at,
-    }));
+    return jsonDb.findMediaByRoom(roomId);
   },
 
   deleteMedia: async (mediaId: string): Promise<MediaRecord | null> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.deleteMedia(mediaId);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase.from('media').delete().eq('id', mediaId);
+      } catch (e) {}
     }
-
-    const media = await supabaseDb.findMediaById(mediaId);
-    if (!media) return null;
-
-    await supabase.from('media').delete().eq('id', mediaId);
-    return media;
+    return jsonDb.deleteMedia(mediaId);
   },
 
   deleteMultipleMedia: async (mediaIds: string[]): Promise<MediaRecord[]> => {
-    if (!isSupabaseConfigured()) {
-      return jsonDb.deleteMultipleMedia(mediaIds);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabase.from('media').delete().in('id', mediaIds);
+      } catch (e) {}
     }
-
-    const { data: mediaItems } = await supabase
-      .from('media')
-      .select('*')
-      .in('id', mediaIds);
-
-    await supabase.from('media').delete().in('id', mediaIds);
-
-    return (mediaItems || []).map((m: any) => ({
-      id: m.id,
-      roomId: m.room_id,
-      memberId: m.member_id,
-      originalFilename: m.original_filename,
-      mimeType: m.mime_type,
-      size: Number(m.size),
-      storagePath: m.storage_path,
-      previewPath: m.preview_path,
-      checksum: m.checksum || '',
-      width: m.width || undefined,
-      height: m.height || undefined,
-      duration: m.duration || undefined,
-      createdAt: m.created_at,
-    }));
+    return jsonDb.deleteMultipleMedia(mediaIds);
   },
 };

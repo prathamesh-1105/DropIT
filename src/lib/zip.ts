@@ -1,7 +1,6 @@
 import JSZip from 'jszip';
-import fs from 'fs/promises';
-import fsSync from 'fs';
 import path from 'path';
+import { downloadFileBuffer } from '@/lib/storage';
 
 export interface ZipMediaItem {
   id: string;
@@ -18,12 +17,19 @@ export async function createZeroLossZipBuffer(
   const rootFolderName = roomName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'Media_Room';
   const rootFolder = zip.folder(rootFolderName);
 
-  for (const item of mediaItems) {
-    if (fsSync.existsSync(item.storagePath)) {
-      const fileBuffer = await fs.readFile(item.storagePath);
+  // Fetch all file buffers in parallel for ultra-fast ZIP generation
+  const fileResults = await Promise.all(
+    mediaItems.map(async (item) => {
+      const fileBuffer = await downloadFileBuffer(item.storagePath);
+      return { item, fileBuffer };
+    })
+  );
+
+  for (const { item, fileBuffer } of fileResults) {
+    if (fileBuffer) {
       const memberFolderName = item.memberName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'Unknown';
       const fileInFolder = rootFolder?.folder(memberFolderName);
-      
+
       // Prevent duplicate file collisions inside the zip
       let filename = item.originalFilename;
       if (fileInFolder && fileInFolder.file(filename)) {
@@ -47,3 +53,4 @@ export async function createZeroLossZipBuffer(
 
   return zipContent;
 }
+

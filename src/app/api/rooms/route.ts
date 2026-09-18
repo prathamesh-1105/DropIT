@@ -1,48 +1,55 @@
 import { NextResponse } from 'next/server';
 import { supabaseDb } from '@/lib/supabase';
-
-function generateRoomCode(): string {
-  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-  let p1 = '';
-  let p2 = '';
-  for (let i = 0; i < 4; i++) {
-    p1 += chars.charAt(Math.floor(Math.random() * chars.length));
-    p2 += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return `${p1}-${p2}`;
-}
+import { jsonDb } from '@/lib/jsonDb';
+import { generateCryptographicRoomCode, generateSecureToken, hashToken } from '@/lib/auth';
+import { checkRateLimit } from '@/lib/rateLimit';
 
 export async function POST(req: Request) {
+  const rl = checkRateLimit(req, 'create_room', 10, 60000);
+  if (!rl.success) return rl.response!;
+
   try {
     const { roomName, creatorName } = await req.json();
 
-    if (!roomName || !creatorName) {
+    if (!roomName || !creatorName || !roomName.trim() || !creatorName.trim()) {
       return NextResponse.json(
         { error: 'Room name and creator name are required' },
         { status: 400 }
       );
     }
 
-    let code = generateRoomCode();
-    let existing = await supabaseDb.findRoomByCode(code);
+    let code = generateCryptographicRoomCode();
+    let existing = jsonDb.findRoomByCode(code);
     while (existing) {
-      code = generateRoomCode();
-      existing = await supabaseDb.findRoomByCode(code);
+      code = generateCryptographicRoomCode();
+      existing = jsonDb.findRoomByCode(code);
     }
+
+    const ownerToken = generateSecureToken();
+    const tokenHash = hashToken(ownerToken);
 
     const { room, creatorMember } = await supabaseDb.createRoom(
       roomName.trim(),
       code,
-      creatorName.trim()
+      creatorName.trim(),
+      tokenHash
     );
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       success: true,
       roomCode: room.code,
       roomId: room.id,
       roomName: room.name,
       creatorMemberId: creatorMember.id,
+      token: ownerToken,
     });
+
+    res.headers.append(
+      'Set-Cookie',
+      `drop_token_${room.code}=${ownerToken}; Path=/; SameSite=Lax; Max-Age=31536000`
+    );
+
+    return res;
   } catch (err: any) {
     console.error('Error creating room:', err);
     return NextResponse.json(
@@ -51,3 +58,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

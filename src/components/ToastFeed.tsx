@@ -20,7 +20,7 @@ export const ToastFeed: React.FC<ToastFeedProps> = ({ toasts, onDismiss }) => {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className="pointer-events-auto p-3.5 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 shadow-xl backdrop-blur-xl flex items-center gap-3 text-xs text-slate-900 dark:text-slate-100 animate-slideLeft font-semibold"
+          className="pointer-events-auto p-3.5 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 shadow-xl backdrop-blur-xl flex items-center gap-3 text-xs text-slate-900 dark:text-slate-100 animate-slideUp font-sans font-semibold"
         >
           {toast.type === 'join' && (
             <div className="w-8 h-8 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">

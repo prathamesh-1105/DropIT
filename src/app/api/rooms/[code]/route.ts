@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseDb } from '@/lib/supabase';
+import { verifyRoomMember } from '@/lib/auth';
 
 export async function GET(
   req: Request,
@@ -14,6 +15,7 @@ export async function GET(
     }
 
     const { room, members, mediaItems } = result;
+    const auth = await verifyRoomMember(req, code);
 
     const membersSummary = members.map((m) => {
       const memberMedia = mediaItems.filter((item) => item.memberId === m.id);
@@ -67,6 +69,8 @@ export async function GET(
       totalStorageBytes,
       members: membersSummary,
       mediaItems: mediaFormatted,
+      isOwner: auth.isOwner,
+      authenticatedMemberId: auth.member?.id || null,
     });
   } catch (err: any) {
     console.error('Error fetching room:', err);
@@ -76,3 +80,4 @@ export async function GET(
     );
   }
 }
+

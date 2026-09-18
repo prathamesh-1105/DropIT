@@ -1,13 +1,24 @@
 import { NextResponse } from 'next/server';
 import { supabaseDb } from '@/lib/supabase';
 import { createZeroLossZipBuffer, ZipMediaItem } from '@/lib/zip';
+import { verifyRoomMember } from '@/lib/auth';
+import { checkRateLimit } from '@/lib/rateLimit';
 
 export async function POST(req: Request) {
+  const rl = checkRateLimit(req, 'download_zip', 15, 60000);
+  if (!rl.success) return rl.response!;
+
   try {
-    const { roomId, memberId, mediaIds } = await req.json();
+    const body = await req.json();
+    const { roomId, memberId, mediaIds, token: bodyToken } = body;
 
     if (!roomId) {
       return NextResponse.json({ error: 'Room ID is required' }, { status: 400 });
+    }
+
+    const auth = await verifyRoomMember(req, roomId, bodyToken);
+    if (!auth.authenticated || !auth.member) {
+      return NextResponse.json({ error: auth.error || 'Access denied.' }, { status: 401 });
     }
 
     const room = await supabaseDb.findRoomById(roomId);
@@ -64,3 +75,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

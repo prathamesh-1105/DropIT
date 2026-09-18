@@ -1,12 +1,19 @@
 import { NextResponse } from 'next/server';
 import { supabaseDb } from '@/lib/supabase';
 import { roomEvents, RoomEventPayload } from '@/lib/events';
+import { verifyRoomMember } from '@/lib/auth';
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params;
+  const auth = await verifyRoomMember(req, code);
+
+  if (!auth.authenticated) {
+    return new NextResponse('Access denied', { status: 401 });
+  }
+
   const result = await supabaseDb.findRoomByCode(code);
 
   if (!result) {
@@ -16,6 +23,7 @@ export async function GET(
   const { room } = result;
 
   const stream = new ReadableStream({
+
     start(controller) {
       const encoder = new TextEncoder();
 

@@ -3,6 +3,7 @@
 import React, { useEffect, useState, use } from 'react';
 import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
+import { DayNightBackground } from '@/components/DayNightBackground';
 import { QrModal } from '@/components/QrModal';
 import { MemberList, MemberSummary } from '@/components/MemberList';
 import { MediaGrid, MediaItemData } from '@/components/MediaGrid';
@@ -20,6 +21,7 @@ import {
   FolderOpen,
 } from 'lucide-react';
 import { formatBytes } from '@/lib/utils';
+import { useUpload } from '@/context/UploadContext';
 
 interface RoomData {
   roomId: string;
@@ -31,6 +33,7 @@ interface RoomData {
   totalStorageBytes: number;
   members: MemberSummary[];
   mediaItems: MediaItemData[];
+  isOwner?: boolean;
 }
 
 export default function RoomPage({
@@ -40,6 +43,7 @@ export default function RoomPage({
 }) {
   const { code } = use(params);
   const router = useRouter();
+  const { tasks } = useUpload();
 
   // Room state
   const [room, setRoom] = useState<RoomData | null>(null);
@@ -70,7 +74,15 @@ export default function RoomPage({
   const fetchRoomData = async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const res = await fetch(`/api/rooms/${code}`);
+      const token = localStorage.getItem(`drop_token_${code}`);
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+        try {
+          document.cookie = `drop_token_${code}=${token}; path=/; SameSite=Lax; max-age=31536000`;
+        } catch (e) {}
+      }
+      const res = await fetch(`/api/rooms/${code}`, { headers });
       if (res.status === 404) {
         setNotFound(true);
         return;
@@ -92,11 +104,19 @@ export default function RoomPage({
         console.error(e);
       }
 
-      const storedMemberId = localStorage.getItem(`drop_member_${data.roomCode}`);
-      if (storedMemberId && data.members.some((m) => m.id === storedMemberId)) {
+      let storedMemberId: string | null = null;
+      try {
+        storedMemberId = localStorage.getItem(`drop_member_${data.roomCode}`);
+      } catch (e) {}
+
+      if (storedMemberId) {
         setCurrentMemberId(storedMemberId);
       } else {
-        const globalName = localStorage.getItem('drop_user_name');
+        let globalName: string | null = null;
+        try {
+          globalName = localStorage.getItem('drop_user_name');
+        } catch (e) {}
+
         if (globalName && globalName.trim()) {
           setJoinNameInput(globalName.trim());
           // Seamlessly join room with device cached name
@@ -108,8 +128,16 @@ export default function RoomPage({
             });
             if (joinRes.ok) {
               const joinData = await joinRes.json();
-              localStorage.setItem(`drop_member_${joinData.roomCode}`, joinData.memberId);
-              localStorage.setItem(`drop_name_${joinData.roomCode}`, joinData.displayName);
+              if (joinData.token) {
+                try {
+                  localStorage.setItem(`drop_token_${joinData.roomCode}`, joinData.token);
+                  document.cookie = `drop_token_${joinData.roomCode}=${joinData.token}; path=/; SameSite=Lax; max-age=31536000`;
+                } catch (e) {}
+              }
+              try {
+                localStorage.setItem(`drop_member_${joinData.roomCode}`, joinData.memberId);
+                localStorage.setItem(`drop_name_${joinData.roomCode}`, joinData.displayName);
+              } catch (e) {}
               setCurrentMemberId(joinData.memberId);
             }
           } catch (joinErr) {
@@ -180,7 +208,8 @@ export default function RoomPage({
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinNameInput.trim()) return;
+    const cleanName = joinNameInput.trim();
+    if (!cleanName) return;
 
     setJoining(true);
     setJoinError('');
@@ -189,7 +218,7 @@ export default function RoomPage({
       const res = await fetch(`/api/rooms/${code}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName: joinNameInput.trim() }),
+        body: JSON.stringify({ displayName: cleanName }),
       });
 
       const text = await res.text();
@@ -201,12 +230,18 @@ export default function RoomPage({
       }
       if (!res.ok) throw new Error(data.error || 'Failed to join room');
 
-      localStorage.setItem(`drop_member_${data.roomCode}`, data.memberId);
-      localStorage.setItem(`drop_name_${data.roomCode}`, data.displayName);
-      localStorage.setItem('drop_user_name', data.displayName);
-      setCurrentMemberId(data.memberId);
+      try {
+        if (data.token) {
+          localStorage.setItem(`drop_token_${data.roomCode}`, data.token);
+          document.cookie = `drop_token_${data.roomCode}=${data.token}; path=/; SameSite=Lax; max-age=31536000`;
+        }
+        localStorage.setItem(`drop_member_${data.roomCode}`, data.memberId);
+        localStorage.setItem(`drop_name_${data.roomCode}`, data.displayName);
+        localStorage.setItem('drop_user_name', data.displayName);
+      } catch (e) {}
 
-      fetchRoomData(true);
+      setCurrentMemberId(data.memberId);
+      await fetchRoomData(true);
     } catch (err: any) {
       setJoinError(err.message || 'Error joining room');
     } finally {
@@ -240,10 +275,14 @@ export default function RoomPage({
   const triggerZipDownload = async (bodyPayload: any, filename: string) => {
     setIsGeneratingZip(true);
     try {
+      const token = localStorage.getItem(`drop_token_${room?.roomCode || code}`);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch('/api/download/zip', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyPayload),
+        headers,
+        body: JSON.stringify({ ...bodyPayload, token }),
       });
 
       if (!res.ok) throw new Error('ZIP generation failed');
@@ -292,10 +331,14 @@ export default function RoomPage({
   const handleRemoveMember = async (memberId: string) => {
     if (!room) return;
     try {
+      const token = localStorage.getItem(`drop_token_${room.roomCode}`);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       await fetch(`/api/rooms/${room.roomCode}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'REMOVE_MEMBER', memberId }),
+        headers,
+        body: JSON.stringify({ action: 'REMOVE_MEMBER', memberId, token }),
       });
       fetchRoomData(true);
     } catch (e) {
@@ -306,10 +349,14 @@ export default function RoomPage({
   const handleDeleteMedia = async (mediaId: string) => {
     if (!room) return;
     try {
+      const token = localStorage.getItem(`drop_token_${room.roomCode}`);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch(`/api/rooms/${room.roomCode}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'DELETE_MEDIA', mediaId }),
+        headers,
+        body: JSON.stringify({ action: 'DELETE_MEDIA', mediaId, token }),
       });
       if (res.ok) {
         setSelectedMediaIds((prev) => {
@@ -334,10 +381,14 @@ export default function RoomPage({
     if (!confirm(`Delete ${count} selected item${count === 1 ? '' : 's'} from room?`)) return;
 
     try {
+      const token = localStorage.getItem(`drop_token_${room.roomCode}`);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch(`/api/rooms/${room.roomCode}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'DELETE_MULTIPLE_MEDIA', mediaIds: Array.from(selectedMediaIds) }),
+        headers,
+        body: JSON.stringify({ action: 'DELETE_MULTIPLE_MEDIA', mediaIds: Array.from(selectedMediaIds), token }),
       });
       if (res.ok) {
         setSelectedMediaIds(new Set());
@@ -356,7 +407,7 @@ export default function RoomPage({
     if (navigator.share && room) {
       try {
         await navigator.share({
-          title: `Join ${room.name} on DROP`,
+          title: `Join ${room.name} on DropIT`,
           text: `Upload & download zero-loss original photos/videos`,
           url: roomUrl,
         });
@@ -370,19 +421,20 @@ export default function RoomPage({
 
   if (notFound) {
     return (
-      <div className="min-h-screen flex flex-col transition-colors">
+      <div className="min-h-screen flex flex-col relative transition-colors duration-500">
+        <DayNightBackground />
         <Navbar showBack />
-        <main className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto my-auto">
-          <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 mb-4">
+        <main className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto my-auto">
+          <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 mb-4 shadow-xl">
             <AlertTriangle className="w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-2">Room Not Found</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-medium">
-            The room code <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">{code}</span> does not exist or has been deleted.
+          <h2 className="font-display text-3xl text-[#060606] dark:text-white mb-2">Room Not Found</h2>
+          <p className="font-sans text-xs text-slate-600 dark:text-slate-400 mb-6 font-normal">
+            The room code <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">#{code}</span> does not exist or has been deleted.
           </p>
           <button
             onClick={() => router.push('/')}
-            className="py-3.5 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs shadow-md shadow-blue-500/20"
+            className="py-3.5 px-6 rounded-2xl bg-[#ffda3f] hover:bg-[#e6c335] text-[#060606] font-sans font-bold text-xs shadow-md shadow-amber-500/15 active:scale-95 transition-all"
           >
             Back to Home
           </button>
@@ -393,19 +445,20 @@ export default function RoomPage({
 
   if (isDeleted) {
     return (
-      <div className="min-h-screen flex flex-col transition-colors">
+      <div className="min-h-screen flex flex-col relative transition-colors duration-500">
+        <DayNightBackground />
         <Navbar showBack />
-        <main className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto my-auto">
-          <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-400 mb-4">
+        <main className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto my-auto">
+          <div className="w-16 h-16 rounded-3xl bg-[#fff9e9] dark:bg-[#0a0a0f] border border-[#e7dfcd] dark:border-white/12 flex items-center justify-center text-slate-400 mb-4 shadow-xl">
             <Trash2 className="w-8 h-8 text-rose-500" />
           </div>
-          <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-2">Room Deleted</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-medium">
+          <h2 className="font-display text-3xl text-[#060606] dark:text-white mb-2">Room Deleted</h2>
+          <p className="font-sans text-xs text-slate-600 dark:text-slate-400 mb-6 font-normal">
             This shared media room has been closed by its creator.
           </p>
           <button
             onClick={() => router.push('/')}
-            className="py-3.5 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs shadow-md shadow-blue-500/20"
+            className="py-3.5 px-6 rounded-2xl bg-[#ffda3f] hover:bg-[#e6c335] text-[#060606] font-sans font-bold text-xs shadow-md shadow-amber-500/15 active:scale-95 transition-all"
           >
             Back to Home
           </button>
@@ -416,18 +469,19 @@ export default function RoomPage({
 
   if (loading || !room) {
     return (
-      <div className="min-h-screen flex flex-col transition-colors">
+      <div className="min-h-screen flex flex-col relative transition-colors duration-500">
+        <DayNightBackground />
         <Navbar />
-        <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6 animate-pulse">
-          <div className="h-20 rounded-3xl bg-slate-200/60 dark:bg-slate-900/60 border border-slate-300/40 dark:border-slate-800/60" />
+        <main className="relative z-10 flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6 animate-pulse">
+          <div className="h-24 rounded-3xl bg-[#eee8d2]/60 dark:bg-[#111c36]/60 border border-[#e7dfcd] dark:border-white/10" />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-20 rounded-2xl bg-slate-200/40 dark:bg-slate-900/40 border border-slate-300/40 dark:border-slate-800/40" />
+              <div key={i} className="h-20 rounded-2xl bg-[#eee8d2]/40 dark:bg-[#111c36]/40 border border-[#e7dfcd] dark:border-white/10" />
             ))}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-              <div key={i} className="aspect-square rounded-2xl bg-slate-200/60 dark:bg-slate-900/60 border border-slate-300/40 dark:border-slate-800/60" />
+              <div key={i} className="aspect-square rounded-2xl bg-[#eee8d2]/60 dark:bg-[#111c36]/60 border border-[#e7dfcd] dark:border-white/10" />
             ))}
           </div>
         </main>
@@ -437,32 +491,33 @@ export default function RoomPage({
 
   if (!currentMemberId) {
     return (
-      <div className="min-h-screen flex flex-col transition-colors">
+      <div className="min-h-screen flex flex-col relative transition-colors duration-500">
+        <DayNightBackground />
         <Navbar showBack roomName={room.name} roomCode={room.roomCode} />
-        <main className="flex-1 flex flex-col items-center justify-center p-6 max-w-md mx-auto my-auto w-full animate-fadeIn">
-          <div className="w-full glass-card p-8 rounded-3xl shadow-2xl text-center">
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-extrabold mb-4">
-              <Users className="w-3.5 h-3.5" />
-              <span>Join Room</span>
+        <main className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 max-w-md mx-auto my-auto w-full animate-fadeIn">
+          <div className="w-full glass-card p-8 rounded-3xl shadow-xl text-center">
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-[#eee8d2] dark:bg-[#111c36] text-[#060606] dark:text-slate-200 border border-[#e7dfcd] dark:border-white/15 text-meta mb-4">
+              <Users className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <span>Join Memory Room</span>
             </div>
 
-            <h2 className="text-2xl font-black text-slate-900 dark:text-white uppercase tracking-wide mb-1">
+            <h2 className="font-display text-3xl text-[#060606] dark:text-white uppercase tracking-wide mb-1 leading-tight">
               {room.name}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-mono font-semibold">
-              Code: <span className="text-blue-600 dark:text-blue-400 font-bold">{room.roomCode}</span>
+            <p className="font-sans text-xs text-slate-600 dark:text-slate-400 mb-6 font-mono font-semibold">
+              Code: <span className="text-amber-600 dark:text-amber-400 font-bold">#{room.roomCode}</span>
             </p>
 
             {joinError && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs mb-4 font-bold">
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs mb-4 font-sans font-bold">
                 {joinError}
               </div>
             )}
 
             <form onSubmit={handleJoinSubmit} className="space-y-4 text-left">
               <div>
-                <label className="block text-xs uppercase font-extrabold tracking-wider text-slate-500 dark:text-slate-400 mb-2">
-                  Your Name
+                <label className="block text-meta text-slate-600 dark:text-slate-400 mb-2">
+                  Your Display Name
                 </label>
                 <input
                   type="text"
@@ -471,14 +526,14 @@ export default function RoomPage({
                   onChange={(e) => setJoinNameInput(e.target.value)}
                   autoFocus
                   required
-                  className="w-full px-4 py-3.5 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 focus:border-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400 text-sm focus:outline-none transition font-semibold"
+                  className="w-full px-4 py-3.5 rounded-2xl bg-[#fff9e9] dark:bg-[#0a0a0f] border border-[#e7dfcd] dark:border-white/15 focus:border-[#ffda3f] text-[#060606] dark:text-white placeholder:text-slate-400 text-sm focus:outline-none transition font-sans font-semibold shadow-xs"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={!joinNameInput.trim() || joining}
-                className="w-full py-4 rounded-2xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-extrabold text-sm transition shadow-xl shadow-blue-500/25 glow-blue"
+                className="w-full py-4 rounded-2xl bg-[#ffda3f] hover:bg-[#e6c335] disabled:opacity-50 text-[#060606] font-sans font-bold text-sm transition-all shadow-xl shadow-amber-500/20 active:scale-95"
               >
                 {joining ? 'Joining...' : 'Join Room'}
               </button>
@@ -496,18 +551,19 @@ export default function RoomPage({
   }, 0);
 
   return (
-    <div className="min-h-screen flex flex-col transition-colors">
+    <div className="min-h-screen flex flex-col relative transition-colors duration-500 pb-12">
+      <DayNightBackground />
       <ToastFeed toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((item) => item.id !== id))} />
 
       {isOffline && (
-        <div className="w-full bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-center text-amber-600 dark:text-amber-300 text-xs font-bold flex items-center justify-center gap-2">
+        <div className="w-full bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 text-center text-amber-600 dark:text-amber-300 text-xs font-sans font-bold flex items-center justify-center gap-2 relative z-50">
           <WifiOff className="w-4 h-4" />
           <span>Network connection interrupted. Uploads will auto-resume once reconnected.</span>
         </div>
       )}
 
       {isGeneratingZip && (
-        <div className="fixed inset-x-0 top-0 z-50 bg-blue-600 text-white px-4 py-3 text-center text-xs font-extrabold flex items-center justify-center gap-2 shadow-2xl animate-pulse">
+        <div className="fixed inset-x-0 top-0 z-50 bg-[#ffda3f] text-[#060606] px-4 py-3 text-center text-xs font-sans font-bold flex items-center justify-center gap-2 shadow-2xl animate-pulse">
           <Download className="w-4 h-4 animate-bounce" />
           <span>Packaging Zero-Loss Originals into ZIP Archive... Please wait.</span>
         </div>
@@ -521,50 +577,50 @@ export default function RoomPage({
         showBack
       />
 
-      <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
-        {/* Room Central Header */}
+      <main className="relative z-10 flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        {/* Room Central Header Card */}
         <div className="p-6 rounded-3xl glass-card shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-wide uppercase">
+            <div className="flex items-center gap-3 mb-1.5 flex-wrap">
+              <h1 className="font-display text-3xl sm:text-4xl text-[#060606] dark:text-white uppercase tracking-tight">
                 {room.name}
               </h1>
-              <span className="px-3 py-0.5 rounded-full text-xs font-mono font-extrabold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                {room.roomCode}
+              <span className="px-3 py-0.5 rounded-full font-mono text-xs font-bold bg-[#eee8d2] dark:bg-[#111c36] text-[#060606] dark:text-amber-400 border border-[#e7dfcd] dark:border-white/15">
+                #{room.roomCode}
               </span>
             </div>
 
-            <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-bold">
-              <span>{room.totalMembers} people</span>
+            <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-slate-400 font-sans font-medium flex-wrap">
+              <span>{room.totalMembers} {room.totalMembers === 1 ? 'member' : 'members'}</span>
               <span>•</span>
               <span>
                 {room.totalItemsCount} {room.totalItemsCount === 1 ? 'item' : 'items'}
               </span>
               <span>•</span>
-              <span className="font-mono text-blue-600 dark:text-blue-400 font-extrabold">
+              <span className="font-mono text-amber-700 dark:text-amber-400 font-bold">
                 {formatBytes(room.totalStorageBytes)}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="flex items-center gap-2.5 w-full sm:w-auto">
             {room.totalItemsCount > 0 && (
               <button
                 onClick={handleDownloadAllRoom}
-                className="py-3 px-4 rounded-2xl bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition"
+                className="py-3 px-4 rounded-2xl bg-[#eee8d2]/80 dark:bg-[#111c36]/80 hover:bg-[#eee8d2] dark:hover:bg-[#111c36] border border-[#e7dfcd] dark:border-white/15 text-[#060606] dark:text-slate-200 text-xs font-sans font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xs"
                 title="Download all original files from room"
               >
-                <Download className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <Download className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span className="hidden sm:inline">Download All</span>
               </button>
             )}
 
             <button
               onClick={() => setShowAddModal(true)}
-              className="flex-1 sm:flex-initial py-3.5 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 transition shadow-lg shadow-blue-500/25 hover:scale-[1.02] glow-blue"
+              className="flex-1 sm:flex-initial py-3.5 px-6 rounded-2xl bg-[#ffda3f] hover:bg-[#e6c335] text-[#060606] font-sans font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-500/20 active:scale-95"
             >
               <Plus className="w-5 h-5 stroke-[3]" />
-              <span>Add</span>
+              <span>+ Add Memories</span>
             </button>
           </div>
         </div>
@@ -580,14 +636,14 @@ export default function RoomPage({
           currentMemberId={currentMemberId}
           onDownloadMemberZip={handleDownloadMemberZip}
           onRemoveMember={handleRemoveMember}
-          isCreator={true}
+          isCreator={room.isOwner ?? false}
         />
 
         {/* Media Gallery Section */}
         <div className="space-y-3">
           <div className="flex items-center justify-between px-1">
-            <h3 className="text-xs uppercase tracking-widest font-extrabold text-slate-500 dark:text-slate-400 flex items-center gap-2">
-              <FolderOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <h3 className="text-meta text-slate-600 dark:text-slate-400 flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
               <span>
                 {selectedMemberObj
                   ? `${selectedMemberObj.displayName}'s Media (${displayedMedia.length})`
@@ -598,7 +654,7 @@ export default function RoomPage({
             {displayedMedia.length > 0 && (
               <button
                 onClick={handleSelectAllToggle}
-                className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition font-bold"
+                className="text-xs font-sans text-slate-600 dark:text-slate-400 hover:text-[#060606] dark:hover:text-white transition font-bold"
               >
                 {selectedMediaIds.size === displayedMedia.length ? 'Deselect All' : 'Select'}
               </button>
@@ -607,6 +663,7 @@ export default function RoomPage({
 
           <MediaGrid
             items={displayedMedia}
+            optimisticTasks={room ? tasks.filter((t) => t.roomId === room.roomId) : []}
             selectedIds={selectedMediaIds}
             onToggleSelect={handleToggleSelectMedia}
             onOpenViewer={(item) => setActiveViewerItem(item)}
@@ -642,6 +699,7 @@ export default function RoomPage({
         onClose={() => setShowAddModal(false)}
         roomId={room.roomId}
         memberId={currentMemberId}
+        roomCode={room.roomCode}
         onUploadSuccess={() => fetchRoomData(true)}
       />
 
@@ -655,3 +713,4 @@ export default function RoomPage({
     </div>
   );
 }
+

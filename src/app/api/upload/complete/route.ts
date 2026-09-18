@@ -9,12 +9,14 @@ import {
   getPreviewFilePath,
   clearChunks,
 } from '@/lib/storage';
-import { calculateFileHash, verifyChecksum } from '@/lib/checksum';
+import { calculateFileHash } from '@/lib/checksum';
 import { generatePreview } from '@/lib/thumbnail';
 import { broadcastRoomEvent } from '@/lib/events';
+import { verifyRoomMember } from '@/lib/auth';
 
 export async function POST(req: Request) {
   try {
+    const body = await req.json();
     const {
       uploadId,
       roomId,
@@ -26,11 +28,74 @@ export async function POST(req: Request) {
       width,
       height,
       duration,
-    } = await req.json();
+      cloud,
+      fileId: customFileId,
+      storagePath: customStoragePath,
+      previewPath: customPreviewPath,
+      token: bodyToken,
+    } = body;
 
-    if (!uploadId || !roomId || !memberId || !originalFilename) {
+    if (!roomId || !memberId || !originalFilename) {
       return NextResponse.json(
         { error: 'Missing completion parameters' },
+        { status: 400 }
+      );
+    }
+
+    const auth = await verifyRoomMember(req, roomId, bodyToken);
+    if (!auth.authenticated || !auth.member) {
+      return NextResponse.json({ error: auth.error || 'Access denied.' }, { status: 401 });
+    }
+
+    if (auth.member.id !== memberId && auth.member.roomId !== auth.room?.id) {
+      return NextResponse.json({ error: 'Access denied. Member mismatch.' }, { status: 403 });
+    }
+
+    const effectiveMemberId = auth.member.id;
+
+    // Direct Cloud Upload Completion Path
+    if (cloud && customStoragePath) {
+      const fileId = customFileId || Math.random().toString(36).substring(2, 11);
+
+      const media = await supabaseDb.addMedia({
+        id: fileId,
+        roomId,
+        memberId: effectiveMemberId,
+        originalFilename,
+        mimeType: mimeType || 'application/octet-stream',
+        size: Number(size),
+        storagePath: customStoragePath,
+        previewPath: customPreviewPath || null,
+        checksum: checksum || '',
+        width: width ? Number(width) : undefined,
+        height: height ? Number(height) : undefined,
+        duration: duration ? Number(duration) : undefined,
+      });
+
+      const roomRes = await supabaseDb.findRoomById(roomId);
+      const roomDetails = roomRes ? await supabaseDb.findRoomByCode(roomRes.code) : null;
+      const memberName = roomDetails?.members.find((m) => m.id === memberId)?.displayName || 'Someone';
+
+      broadcastRoomEvent({
+        roomId,
+        type: 'MEDIA_ADDED',
+        memberId,
+        memberName,
+        filename: originalFilename,
+        timestamp: Date.now(),
+      });
+
+      return NextResponse.json({
+        success: true,
+        mediaId: media.id,
+        checksum: media.checksum,
+      });
+    }
+
+    // Local Disk Chunk Assembly Fallback Path
+    if (!uploadId) {
+      return NextResponse.json(
+        { error: 'Missing uploadId parameter for chunk assembly' },
         { status: 400 }
       );
     }
@@ -72,22 +137,20 @@ export async function POST(req: Request) {
     // Asynchronously clear temporary chunks
     clearChunks(uploadId).catch((e) => console.error(e));
 
-    // Fast SHA-256 calculation / fallback
-    const serverHash = await calculateFileHash(destinationPath).catch(() => checksum || '');
-
-    // Non-blocking preview generation in background for maximum speed
+    // Non-blocking background hash calculation & preview generation
+    calculateFileHash(destinationPath).catch(() => {});
     generatePreview(destinationPath, previewPath, mimeType).catch((e) => console.error(e));
 
     const media = await supabaseDb.addMedia({
       id: fileId,
       roomId,
-      memberId,
+      memberId: effectiveMemberId,
       originalFilename,
       mimeType,
       size: Number(size),
       storagePath: destinationPath,
       previewPath: previewPath,
-      checksum: serverHash || checksum || '',
+      checksum: checksum || '',
       width: width ? Number(width) : undefined,
       height: height ? Number(height) : undefined,
       duration: duration ? Number(duration) : undefined,
@@ -119,3 +182,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

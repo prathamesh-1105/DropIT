@@ -36,6 +36,8 @@ export interface MemberRecord {
   id: string;
   roomId: string;
   displayName: string;
+  tokenHash?: string;
+  role?: 'OWNER' | 'MEMBER';
   joinedAt: string;
 }
 
@@ -122,7 +124,7 @@ function writeDb(data: DbSchema) {
 
 export const jsonDb = {
   // Room queries
-  createRoom: (name: string, code: string, createdBy: string) => {
+  createRoom: (name: string, code: string, createdBy: string, tokenHash?: string) => {
     const db = readDb();
     const roomId = Math.random().toString(36).substring(2, 11);
     const memberId = Math.random().toString(36).substring(2, 11);
@@ -139,6 +141,8 @@ export const jsonDb = {
       id: memberId,
       roomId,
       displayName: createdBy,
+      tokenHash: tokenHash || '',
+      role: 'OWNER',
       joinedAt: new Date().toISOString(),
     };
 
@@ -170,6 +174,11 @@ export const jsonDb = {
     return db.rooms.find((r) => r.id === id) || null;
   },
 
+  findMembersByRoomId: (roomId: string) => {
+    const db = readDb();
+    return db.members.filter((m) => m.roomId === roomId);
+  },
+
   deleteRoom: (roomId: string) => {
     const db = readDb();
     db.rooms = db.rooms.filter((r) => r.id !== roomId);
@@ -188,23 +197,31 @@ export const jsonDb = {
   },
 
   // Member queries
-  addMember: (roomId: string, displayName: string) => {
+  addMember: (roomId: string, displayName: string, tokenHash?: string, role: 'OWNER' | 'MEMBER' = 'MEMBER') => {
     const db = readDb();
     let existing = db.members.find(
       (m) => m.roomId === roomId && m.displayName.toLowerCase() === displayName.toLowerCase()
     );
-    if (existing) return existing;
+    if (existing) {
+      if (tokenHash) existing.tokenHash = tokenHash;
+      if (role) existing.role = role;
+      writeDb(db);
+      return existing;
+    }
 
     const newMember: MemberRecord = {
       id: Math.random().toString(36).substring(2, 11),
       roomId,
       displayName,
+      tokenHash: tokenHash || '',
+      role,
       joinedAt: new Date().toISOString(),
     };
     db.members.push(newMember);
     writeDb(db);
     return newMember;
   },
+
 
   removeMember: (memberId: string) => {
     const db = readDb();

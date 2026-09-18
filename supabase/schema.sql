@@ -11,18 +11,19 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rooms_code ON rooms(code);
-ALTER TABLE rooms DISABLE ROW LEVEL SECURITY;
 
 -- 2. Members Table
 CREATE TABLE IF NOT EXISTS members (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   display_name TEXT NOT NULL,
+  token_hash TEXT,
+  role TEXT DEFAULT 'MEMBER',
   joined_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_room_id ON members(room_id);
-ALTER TABLE members DISABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_members_token_hash ON members(token_hash);
 
 -- 3. Media Table
 CREATE TABLE IF NOT EXISTS media (
@@ -43,7 +44,6 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX IF NOT EXISTS idx_media_room_id ON media(room_id);
 CREATE INDEX IF NOT EXISTS idx_media_member_id ON media(member_id);
-ALTER TABLE media DISABLE ROW LEVEL SECURITY;
 
 -- 4. Upload Chunks Table (for chunked uploading)
 CREATE TABLE IF NOT EXISTS upload_chunks (
@@ -56,9 +56,21 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
   CONSTRAINT unique_upload_chunk UNIQUE (upload_id, chunk_index)
 );
 
-ALTER TABLE upload_chunks DISABLE ROW LEVEL SECURITY;
+-- 5. Row Level Security Policies (Defense in depth)
+ALTER TABLE rooms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE media ENABLE ROW LEVEL SECURITY;
+ALTER TABLE upload_chunks ENABLE ROW LEVEL SECURITY;
 
--- 5. Storage Bucket setup (dropit-media)
+-- Allow full access strictly for the internal API service role
+CREATE POLICY "Allow service role full access on rooms" ON rooms TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "Allow service role full access on members" ON members TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "Allow service role full access on media" ON media TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "Allow service role full access on upload_chunks" ON upload_chunks TO service_role USING (true) WITH CHECK (true);
+
+-- 6. Private Storage Bucket setup (dropit-media)
 INSERT INTO storage.buckets (id, name, public)
-VALUES ('dropit-media', 'dropit-media', true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('dropit-media', 'dropit-media', false)
+ON CONFLICT (id) DO UPDATE SET public = false;
+
+

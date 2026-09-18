@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ShieldCheck, Share2, QrCode, ArrowLeft, Sun, Moon } from 'lucide-react';
+import { Logo } from '@/components/Logo';
+
 
 interface NavbarProps {
   roomName?: string;
@@ -33,57 +35,71 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, []);
 
   const toggleTheme = () => {
-    if (isDark) {
-      setIsDark(false);
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('drop_theme', 'light');
+    const applyThemeChange = () => {
+      if (isDark) {
+        setIsDark(false);
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('drop_theme', 'light');
+      } else {
+        setIsDark(true);
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('drop_theme', 'dark');
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      const doc = document as any;
+      if (typeof doc.startViewTransition === 'function') {
+        doc.startViewTransition(() => {
+          applyThemeChange();
+        });
+      } else {
+        document.body.classList.add('theme-fading');
+        applyThemeChange();
+        setTimeout(() => {
+          document.body.classList.remove('theme-fading');
+        }, 500);
+      }
     } else {
-      setIsDark(true);
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('drop_theme', 'dark');
+      applyThemeChange();
     }
   };
 
+
+
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-slate-200/60 dark:border-slate-800/80 bg-white/60 dark:bg-slate-950/60 backdrop-blur-xl px-4 py-3 transition-colors">
+    <header className="sticky top-0 z-40 w-full border-b border-[#e7dfcd] dark:border-white/10 bg-[#fff9f1]/85 dark:bg-[#0a0a0f]/85 backdrop-blur-xl px-4 py-3.5 transition-colors duration-500">
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3">
           {showBack && (
             <Link
               href="/"
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/80 transition"
+              className="p-2.5 rounded-2xl text-[#060606] dark:text-slate-200 hover:bg-[#eee8d2] dark:hover:bg-[#111c36] transition-all flex items-center justify-center border border-transparent hover:border-[#e7dfcd] dark:hover:border-white/10"
               title="Back to Home"
             >
               <ArrowLeft className="w-5 h-5" />
             </Link>
           )}
 
-          <Link href="/" className="flex items-center gap-2.5 group">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo.png"
-              alt="DropIT Logo"
-              className="w-9 h-9 rounded-xl object-cover shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform"
-            />
-            <span className="font-display font-extrabold text-xl tracking-wide text-slate-950 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-              DropIT
-            </span>
+          <Link href="/" className="flex items-center gap-3 group">
+            <Logo size="sm" showSubtitle={false} />
           </Link>
 
-          <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            Zero-Loss
+
+          <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-meta bg-[#eee8d2] dark:bg-[#111c36] text-[#060606] dark:text-slate-200 border border-[#e7dfcd] dark:border-white/15">
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+            Original Quality
           </span>
         </div>
 
         <div className="flex items-center gap-2">
           {roomName && roomCode && (
             <div className="hidden md:flex flex-col text-right mr-2">
-              <span className="font-bold text-xs text-slate-900 dark:text-white uppercase tracking-wider">
+              <span className="font-sans font-bold text-xs text-[#060606] dark:text-white uppercase tracking-wider">
                 {roomName}
               </span>
-              <span className="text-xs font-mono font-semibold text-blue-600 dark:text-blue-400">
-                {roomCode}
+              <span className="text-xs font-mono font-bold text-amber-600 dark:text-amber-400">
+                #{roomCode}
               </span>
             </div>
           )}
@@ -91,18 +107,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           {onOpenQr && (
             <button
               onClick={onOpenQr}
-              className="p-2.5 rounded-xl text-slate-700 dark:text-slate-200 bg-slate-100/80 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 transition flex items-center gap-1.5 text-xs font-semibold"
+              className="p-2.5 sm:px-3.5 sm:py-2.5 rounded-2xl text-[#060606] dark:text-slate-200 bg-[#eee8d2]/70 dark:bg-[#111c36]/80 border border-[#e7dfcd] dark:border-white/15 hover:bg-[#eee8d2] dark:hover:bg-[#111c36] transition-all flex items-center gap-2 text-xs font-bold shadow-xs active:scale-95"
               title="Show QR Code"
             >
-              <QrCode className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-              <span className="hidden sm:inline">QR</span>
+              <QrCode className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <span className="hidden sm:inline font-sans">QR Code</span>
             </button>
           )}
 
           {onShare && (
             <button
               onClick={onShare}
-              className="p-2.5 rounded-xl text-white bg-blue-600 hover:bg-blue-500 transition flex items-center gap-1.5 text-xs font-bold shadow-md shadow-blue-500/20"
+              className="p-2.5 sm:px-4 sm:py-2.5 rounded-2xl text-[#060606] bg-[#ffda3f] hover:bg-[#e6c335] transition-all flex items-center gap-2 text-xs font-bold shadow-md shadow-amber-500/20 active:scale-95 font-sans"
               title="Share Room Link"
             >
               <Share2 className="w-4 h-4" />
@@ -110,20 +126,28 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          {/* Light / Dark Mode Toggle */}
+          {/* DAY ☀️ ↔ NIGHT 🌙 Mode Toggle (ZainabKabira Atmosphere Dissolve Trigger) */}
           <button
             onClick={toggleTheme}
-            className="p-2.5 rounded-xl text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
-            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="relative w-10 h-10 rounded-full bg-[#eee8d2] dark:bg-[#111c36] border border-[#e7dfcd] dark:border-white/15 hover:scale-105 active:scale-95 transition-all shadow-xs overflow-hidden flex items-center justify-center group"
+            title={isDark ? 'Switch to DAY Mode ☀️' : 'Switch to NIGHT Mode 🌙'}
           >
-            {isDark ? (
-              <Sun className="w-4 h-4 text-amber-400" />
-            ) : (
-              <Moon className="w-4 h-4 text-slate-700" />
-            )}
+            {/* Sun Icon (Day) */}
+            <Sun
+              className={`absolute w-5 h-5 text-amber-600 toggle-ico-sun ${
+                isDark ? 'translate-y-8 opacity-0' : 'translate-y-0 opacity-100'
+              }`}
+            />
+            {/* Moon Icon (Night) */}
+            <Moon
+              className={`absolute w-5 h-5 text-slate-100 toggle-ico-moon ${
+                isDark ? 'translate-y-0 opacity-100' : '-translate-y-8 opacity-0'
+              }`}
+            />
           </button>
         </div>
       </div>
     </header>
   );
 };
+
