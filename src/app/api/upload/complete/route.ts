@@ -107,7 +107,8 @@ export async function POST(req: Request) {
       fileId,
       originalFilename
     );
-    const previewPath = getPreviewFilePath(roomId, fileId);
+    const isVideo = (mimeType || '').startsWith('video/');
+    const previewPath = isVideo ? destinationPath : getPreviewFilePath(roomId, fileId);
 
     const chunkDir = path.dirname(getChunkFilePath(uploadId, 0));
     if (!fsSync.existsSync(chunkDir)) {
@@ -125,21 +126,33 @@ export async function POST(req: Request) {
         return idxA - idxB;
       });
 
-    // Write untouched original file
-    const destHandle = await fs.open(destinationPath, 'w');
-    for (const chunkFile of chunkFiles) {
-      const chunkPath = path.join(chunkDir, chunkFile);
-      const chunkBuffer = await fs.readFile(chunkPath);
-      await destHandle.write(chunkBuffer);
+    const destDir = path.dirname(destinationPath);
+    if (!fsSync.existsSync(destDir)) {
+      await fs.mkdir(destDir, { recursive: true });
     }
-    await destHandle.close();
+
+    // Fast assembly: if single chunk, move/rename directly; otherwise stream chunks sequentially
+    if (chunkFiles.length === 1) {
+      const singleChunkPath = path.join(chunkDir, chunkFiles[0]);
+      await fs.copyFile(singleChunkPath, destinationPath);
+    } else {
+      const destHandle = await fs.open(destinationPath, 'w');
+      for (const chunkFile of chunkFiles) {
+        const chunkPath = path.join(chunkDir, chunkFile);
+        const chunkBuffer = await fs.readFile(chunkPath);
+        await destHandle.write(chunkBuffer);
+      }
+      await destHandle.close();
+    }
 
     // Asynchronously clear temporary chunks
     clearChunks(uploadId).catch((e) => console.error(e));
 
     // Non-blocking background hash calculation & preview generation
     calculateFileHash(destinationPath).catch(() => {});
-    generatePreview(destinationPath, previewPath, mimeType).catch((e) => console.error(e));
+    if (!isVideo) {
+      generatePreview(destinationPath, previewPath, mimeType).catch((e) => console.error(e));
+    }
 
     const media = await supabaseDb.addMedia({
       id: fileId,

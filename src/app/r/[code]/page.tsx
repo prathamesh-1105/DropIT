@@ -19,6 +19,7 @@ import {
   WifiOff,
   AlertTriangle,
   FolderOpen,
+  LayoutGrid,
 } from 'lucide-react';
 import { formatBytes } from '@/lib/utils';
 import { useUpload } from '@/context/UploadContext';
@@ -61,6 +62,7 @@ export default function RoomPage({
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [selectedMediaIds, setSelectedMediaIds] = useState<Set<string>>(new Set());
   const [activeViewerItem, setActiveViewerItem] = useState<MediaItemData | null>(null);
+  const [groupByMember, setGroupByMember] = useState(true);
 
   // Modals & Drawers
   const [showAddModal, setShowAddModal] = useState(false);
@@ -640,21 +642,53 @@ export default function RoomPage({
         />
 
         {/* Media Gallery Section */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <h3 className="text-meta text-slate-600 dark:text-slate-400 flex items-center gap-2">
-              <FolderOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <span>
-                {selectedMemberObj
-                  ? `${selectedMemberObj.displayName}'s Media (${displayedMedia.length})`
-                  : `All Media (${displayedMedia.length})`}
-              </span>
-            </h3>
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-3">
+              <h3 className="text-meta text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span>
+                  {selectedMemberObj
+                    ? `${selectedMemberObj.displayName}'s Media (${displayedMedia.length})`
+                    : `Media Gallery (${displayedMedia.length})`}
+                </span>
+              </h3>
+
+              {/* View Mode Toggle: Grouped by User vs Timeline */}
+              {!selectedMemberId && displayedMedia.length > 0 && (
+                <div className="flex items-center bg-[#eee8d2] dark:bg-[#111c36] p-0.5 rounded-xl border border-[#e7dfcd] dark:border-white/15">
+                  <button
+                    onClick={() => setGroupByMember(true)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-sans font-bold transition-all flex items-center gap-1.5 ${
+                      groupByMember
+                        ? 'bg-[#ffda3f] text-[#060606] shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-[#060606] dark:hover:text-white'
+                    }`}
+                    title="Group photos and videos by uploader"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>By User</span>
+                  </button>
+                  <button
+                    onClick={() => setGroupByMember(false)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-sans font-bold transition-all flex items-center gap-1.5 ${
+                      !groupByMember
+                        ? 'bg-[#ffda3f] text-[#060606] shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-[#060606] dark:hover:text-white'
+                    }`}
+                    title="Show all photos and videos in a combined timeline"
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>Timeline</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {displayedMedia.length > 0 && (
               <button
                 onClick={handleSelectAllToggle}
-                className="text-xs font-sans text-slate-600 dark:text-slate-400 hover:text-[#060606] dark:hover:text-white transition font-bold"
+                className="text-xs font-sans text-slate-600 dark:text-slate-400 hover:text-[#060606] dark:hover:text-white transition font-bold self-end sm:self-auto"
               >
                 {selectedMediaIds.size === displayedMedia.length ? 'Deselect All' : 'Select'}
               </button>
@@ -669,6 +703,10 @@ export default function RoomPage({
             onOpenViewer={(item) => setActiveViewerItem(item)}
             onDeleteMedia={handleDeleteMedia}
             isSelecting={selectedMediaIds.size > 0}
+            groupByMember={selectedMemberId ? false : groupByMember}
+            members={room.members}
+            currentMemberId={currentMemberId}
+            onDownloadMemberZip={handleDownloadMemberZip}
           />
         </div>
       </main>

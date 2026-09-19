@@ -53,9 +53,9 @@ interface UploadContextType {
 
 const UploadContext = createContext<UploadContextType | undefined>(undefined);
 
-const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB chunks
-const MAX_CONCURRENT_UPLOADS = 12;
-const MAX_CONCURRENT_CHUNKS = 8;
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks for optimal streaming throughput
+const MAX_CONCURRENT_UPLOADS = 8;
+const MAX_CONCURRENT_CHUNKS = 4;
 
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [tasks, setTasks] = useState<UploadTask[]>([]);
@@ -212,20 +212,27 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const extractMediaMetadata = (file: File): Promise<{ width?: number; height?: number; duration?: number }> => {
     return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({}), 1500);
+
       if (file.type.startsWith('image/')) {
         const img = new Image();
         const url = URL.createObjectURL(file);
         img.onload = () => {
+          clearTimeout(timer);
           resolve({ width: img.naturalWidth, height: img.naturalHeight });
           URL.revokeObjectURL(url);
         };
-        img.onerror = () => resolve({});
+        img.onerror = () => {
+          clearTimeout(timer);
+          resolve({});
+        };
         img.src = url;
       } else if (file.type.startsWith('video/')) {
         const video = document.createElement('video');
         const url = URL.createObjectURL(file);
         video.preload = 'metadata';
         video.onloadedmetadata = () => {
+          clearTimeout(timer);
           resolve({
             width: video.videoWidth,
             height: video.videoHeight,
@@ -233,9 +240,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
           URL.revokeObjectURL(url);
         };
-        video.onerror = () => resolve({});
+        video.onerror = () => {
+          clearTimeout(timer);
+          resolve({});
+        };
         video.src = url;
       } else {
+        clearTimeout(timer);
         resolve({});
       }
     });
@@ -308,6 +319,48 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         createdAt: Date.now(),
         ...meta,
       });
+    });
+  };
+
+  const postBinaryChunkWithProgress = (
+    url: string,
+    chunkBlob: Blob,
+    token?: string | null,
+    onProgress?: (loaded: number, total: number) => void
+  ): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            onProgress(e.loaded, e.total);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch (e) {
+            resolve({ ok: true });
+          }
+        } else {
+          reject(new Error(`Upload status ${xhr.status}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onabort = () => reject(new Error('Upload aborted'));
+
+      xhr.send(chunkBlob);
     });
   };
 
@@ -457,15 +510,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('Direct cloud upload error, falling back to local chunk upload:', cloudErr);
       }
 
-      // Fast Burst Path for files <= 25MB
-      if (file.size <= 25 * 1024 * 1024) {
-        const formData = new FormData();
-        formData.append('uploadId', uploadId);
-        formData.append('chunkIndex', '0');
-        formData.append('totalChunks', '1');
-        formData.append('chunk', file);
-
-        await postFormDataWithProgress('/api/upload/chunk', formData, token, (loaded, total) => {
+      // Fast Burst Path for single-chunk files <= 16MB
+      if (file.size <= 16 * 1024 * 1024) {
+        const chunkUrl = `/api/upload/chunk?uploadId=${encodeURIComponent(uploadId)}&chunkIndex=0`;
+        await postBinaryChunkWithProgress(chunkUrl, file, token, (loaded, total) => {
           const currentProgress = Math.min(92, Math.round((loaded / total) * 92));
           const elapsed = (Date.now() - startTime) / 1000;
           const speedFormatted = elapsed > 0 ? `${formatBytes(loaded / elapsed)}/s` : 'Fast';
@@ -539,13 +587,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunkBlob = file.slice(start, end);
 
-        const formData = new FormData();
-        formData.append('uploadId', uploadId);
-        formData.append('chunkIndex', chunkIndex.toString());
-        formData.append('totalChunks', totalChunks.toString());
-        formData.append('chunk', chunkBlob);
-
-        await postFormDataWithProgress('/api/upload/chunk', formData, token, (loaded) => {
+        const chunkUrl = `/api/upload/chunk?uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${chunkIndex}`;
+        await postBinaryChunkWithProgress(chunkUrl, chunkBlob, token, (loaded) => {
           chunkProgresses[chunkIndex] = loaded;
           const totalLoaded = Object.values(chunkProgresses).reduce((sum, b) => sum + b, 0);
           const currentPercent = Math.min(92, Math.round((totalLoaded / file.size) * 92));

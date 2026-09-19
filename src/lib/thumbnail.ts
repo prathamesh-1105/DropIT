@@ -12,29 +12,21 @@ export async function generatePreview(
   mimeType: string
 ): Promise<boolean> {
   try {
+    // If preview path points to original path or if it's a video file, skip copying
+    if (originalPath === previewPath || mimeType.startsWith('video/')) {
+      return true;
+    }
+
     const previewDir = path.dirname(previewPath);
     if (!fsSync.existsSync(previewDir)) {
       await fs.mkdir(previewDir, { recursive: true });
     }
 
-    // For standard web images (JPG, PNG, WebP, GIF), we can copy or serve directly,
-    // or copy to preview path as lightweight asset.
     if (mimeType.startsWith('image/')) {
       await fs.copyFile(originalPath, previewPath);
       return true;
     }
 
-    // For videos, create a placeholder video poster thumbnail or copy
-    if (mimeType.startsWith('video/')) {
-      // In production server environment without ffmpeg binary,
-      // client-side video preview thumbnail is generated on upload via HTML5 <canvas>.
-      // Server saves fallback copy.
-      await fs.copyFile(originalPath, previewPath);
-      return true;
-    }
-
-    // Default fallback
-    await fs.copyFile(originalPath, previewPath);
     return true;
   } catch (err) {
     console.error('Error generating server preview:', err);
