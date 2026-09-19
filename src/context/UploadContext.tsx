@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import * as tus from 'tus-js-client';
 import { formatBytes } from '@/lib/utils';
-import { calculateSHA256 } from '@/lib/clientChecksum';
+import { calculateSHA256, cancelSHA256 } from '@/lib/clientChecksum';
 import {
   requestNotificationPermission,
   sendUploadProgressNotification,
@@ -421,7 +421,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const startTime = Date.now();
 
     try {
-      const checksumPromise = calculateSHA256(file);
+      const checksumPromise = calculateSHA256(file, id);
       const token =
         (roomCode ? localStorage.getItem(`drop_token_${roomCode}`) : null) ||
         localStorage.getItem(`drop_token_${roomId}`) ||
@@ -751,6 +751,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const removeTask = (id: string) => {
     activeUploadsRef.current[id] = false;
+    cancelSHA256(id);
     removeUploadTaskFromDB(id);
     setTasks((prev) => prev.filter((t) => t.id !== id));
   };
