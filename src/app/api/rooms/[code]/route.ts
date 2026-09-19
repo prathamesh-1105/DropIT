@@ -18,7 +18,12 @@ export async function GET(
     const auth = await verifyRoomMember(req, code);
 
     const membersSummary = members.map((m) => {
-      const memberMedia = mediaItems.filter((item) => item.memberId === m.id);
+      const memberMedia = mediaItems.filter(
+        (item) =>
+          item.memberId === m.id ||
+          ((item as any).memberName &&
+            String((item as any).memberName).toLowerCase().trim() === m.displayName.toLowerCase().trim())
+      );
       const totalSize = memberMedia.reduce((acc, curr) => acc + Number(curr.size), 0);
       return {
         id: m.id,
@@ -40,7 +45,12 @@ export async function GET(
     );
 
     const mediaFormatted = sortedMedia.map((m) => {
-      const member = members.find((mem) => mem.id === m.memberId);
+      let member = members.find((mem) => mem.id === m.memberId);
+      if (!member && (m as any).memberName) {
+        member = members.find(
+          (mem) => mem.displayName.toLowerCase().trim() === String((m as any).memberName).toLowerCase().trim()
+        );
+      }
       return {
         id: m.id,
         originalFilename: m.originalFilename,
@@ -52,7 +62,7 @@ export async function GET(
         duration: m.duration,
         createdAt: m.createdAt,
         memberId: m.memberId,
-        memberName: member ? member.displayName : 'Unknown',
+        memberName: member ? member.displayName : (m as any).memberName || 'Member',
         previewUrl: `/api/media/${m.id}/preview`,
         originalUrl: `/api/media/${m.id}/original`,
       };

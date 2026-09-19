@@ -331,10 +331,26 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
     // Assign items to member groups
     items.forEach((item) => {
       let group = memberGroupMap.get(item.memberId);
+      if (!group && item.memberName) {
+        const matchedMember = members.find(
+          (m) => m.displayName.toLowerCase().trim() === item.memberName.toLowerCase().trim()
+        );
+        if (matchedMember) {
+          group = memberGroupMap.get(matchedMember.id);
+        }
+      }
+      if (!group && item.memberName) {
+        for (const g of memberGroupMap.values()) {
+          if (g.memberName.toLowerCase().trim() === item.memberName.toLowerCase().trim()) {
+            group = g;
+            break;
+          }
+        }
+      }
       if (!group) {
         group = {
           memberId: item.memberId,
-          memberName: item.memberName,
+          memberName: item.memberName || 'Member',
           items: [],
           tasks: [],
           totalBytes: 0,
@@ -348,6 +364,18 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
     // Assign optimistic tasks to member groups
     activeOptimisticTasks.forEach((task) => {
       let group = memberGroupMap.get(task.memberId);
+      if (!group && task.memberId === currentMemberId) {
+        const currentM = members.find((m) => m.id === currentMemberId);
+        if (currentM) group = memberGroupMap.get(currentM.id);
+      }
+      if (!group) {
+        for (const g of memberGroupMap.values()) {
+          if (g.memberId === currentMemberId) {
+            group = g;
+            break;
+          }
+        }
+      }
       if (!group) {
         const uploaderName = task.memberId === currentMemberId ? 'You' : 'Member';
         group = {

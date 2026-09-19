@@ -111,8 +111,27 @@ export default function RoomPage({
         storedMemberId = localStorage.getItem(`drop_member_${data.roomCode}`);
       } catch (e) {}
 
-      if (storedMemberId) {
-        setCurrentMemberId(storedMemberId);
+      let matchedMember = data.members.find((m) => m.id === storedMemberId);
+      if (!matchedMember) {
+        let storedName: string | null = null;
+        try {
+          storedName = localStorage.getItem(`drop_name_${data.roomCode}`) || localStorage.getItem('drop_user_name');
+        } catch (e) {}
+        if (storedName) {
+          matchedMember = data.members.find(
+            (m) => m.displayName.toLowerCase().trim() === storedName.toLowerCase().trim()
+          );
+          if (matchedMember) {
+            try {
+              localStorage.setItem(`drop_member_${data.roomCode}`, matchedMember.id);
+            } catch (e) {}
+          }
+        }
+      }
+
+      const activeMemberId = matchedMember ? matchedMember.id : storedMemberId;
+      if (activeMemberId) {
+        setCurrentMemberId(activeMemberId);
       } else {
         let globalName: string | null = null;
         try {
