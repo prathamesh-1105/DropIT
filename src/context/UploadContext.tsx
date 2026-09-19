@@ -56,9 +56,35 @@ const UploadContext = createContext<UploadContextType | undefined>(undefined);
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks for optimal streaming throughput
 const SMALL_FILE_THRESHOLD = 15 * 1024 * 1024; // 15MB threshold for small files / photos pool
-const PHOTO_CONCURRENCY = 5; // Up to 5 small file uploads simultaneously
-const LARGE_FILE_CONCURRENCY = 2; // Up to 2 large file / TUS video uploads simultaneously
 const MAX_CONCURRENT_CHUNKS = 4;
+
+export function getAdaptiveConcurrency(): { photoConcurrency: number; largeFileConcurrency: number } {
+  if (typeof window === 'undefined') {
+    return { photoConcurrency: 5, largeFileConcurrency: 2 };
+  }
+
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory = (navigator as any).deviceMemory || 8;
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent
+  );
+
+  // Mobile / Low-Capability Profile (<= 4 CPU cores OR <= 4GB RAM OR mobile UA)
+  if (isMobile || cores <= 4 || memory <= 4) {
+    return { photoConcurrency: 3, largeFileConcurrency: 1 };
+  }
+
+  // High-End Desktop Profile
+  return { photoConcurrency: 5, largeFileConcurrency: 2 };
+}
+
+const safeRevokeObjectURL = (url?: string) => {
+  if (url && url.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (e) {}
+  }
+};
 
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [tasks, setTasks] = useState<UploadTask[]>([]);
@@ -68,6 +94,34 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const activeUploadsRef = useRef<{ [key: string]: boolean }>({});
   const lastNotifyTimeRef = useRef<number>(0);
   const callbacksRef = useRef<{ [roomId: string]: Set<() => void> }>({});
+  const lastProgressUpdateRef = useRef<{ [taskId: string]: number }>({});
+
+  const updateTaskProgress = (
+    id: string,
+    progress: number,
+    uploadedBytes: number,
+    speed: string,
+    forceImmediate = false
+  ) => {
+    const now = Date.now();
+    const lastUpdate = lastProgressUpdateRef.current[id] || 0;
+
+    if (forceImmediate || progress === 100 || progress === 0 || now - lastUpdate >= 100) {
+      lastProgressUpdateRef.current[id] = now;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id ? { ...t, progress, uploadedBytes, speed } : t
+        )
+      );
+    }
+  };
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      tasks.forEach((t) => safeRevokeObjectURL(t.previewUrl));
+    };
+  }, []);
 
   // Restore incomplete upload tasks from IndexedDB on startup / reload
   useEffect(() => {
@@ -180,8 +234,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Process dual-pool async task queue & OS desktop notifications
+  // Process adaptive dual-pool async task queue & OS desktop notifications
   useEffect(() => {
+    const { photoConcurrency, largeFileConcurrency } = getAdaptiveConcurrency();
+
     // Pool 1: Small files / photos (<= 15MB)
     const smallUploading = tasks.filter(
       (t) => t.status === 'uploading' && t.file.size <= SMALL_FILE_THRESHOLD
@@ -192,7 +248,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         t.file.size <= SMALL_FILE_THRESHOLD &&
         !activeUploadsRef.current[t.id]
     );
-    const smallSlotsAvailable = PHOTO_CONCURRENCY - smallUploading.length;
+    const smallSlotsAvailable = photoConcurrency - smallUploading.length;
 
     if (smallSlotsAvailable > 0 && smallPending.length > 0) {
       const smallToStart = smallPending.slice(0, smallSlotsAvailable);
@@ -212,7 +268,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         t.file.size > SMALL_FILE_THRESHOLD &&
         !activeUploadsRef.current[t.id]
     );
-    const largeSlotsAvailable = LARGE_FILE_CONCURRENCY - largeUploading.length;
+    const largeSlotsAvailable = largeFileConcurrency - largeUploading.length;
 
     if (largeSlotsAvailable > 0 && largePending.length > 0) {
       const largeToStart = largePending.slice(0, largeSlotsAvailable);
@@ -538,14 +594,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                       const currentPercent = Math.min(95, Math.round((bytesUploaded / bytesTotal) * 95));
                       const elapsed = (Date.now() - startTime) / 1000;
                       const speedFormatted = elapsed > 0 ? `${formatBytes(bytesUploaded / elapsed)}/s` : 'Direct TUS';
-
-                      setTasks((prev) =>
-                        prev.map((t) =>
-                          t.id === id
-                            ? { ...t, progress: currentPercent, uploadedBytes: bytesUploaded, speed: speedFormatted }
-                            : t
-                        )
-                      );
+                      updateTaskProgress(id, currentPercent, bytesUploaded, speedFormatted, false);
                     },
                     onSuccess: () => {
                       resolve();
@@ -563,9 +612,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
             // Finalize Direct Cloud Upload via /api/upload/complete
             if (isUploadSuccess) {
-              setTasks((prev) =>
-                prev.map((t) => (t.id === id ? { ...t, progress: 98, speed: 'Completing...' } : t))
-              );
+              updateTaskProgress(id, 98, file.size, 'Completing...', true);
 
               const checksum = await checksumPromise;
               const completeRes = await fetch('/api/upload/complete', {
@@ -593,13 +640,15 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 const elapsedSeconds = (Date.now() - startTime) / 1000;
                 const speedFormatted = elapsedSeconds > 0 ? `${formatBytes(file.size / elapsedSeconds)}/s` : 'Direct Cloud';
 
+                updateTaskProgress(id, 100, file.size, speedFormatted, true);
                 setTasks((prev) =>
                   prev.map((t) =>
                     t.id === id
-                      ? { ...t, progress: 100, status: 'completed', speed: speedFormatted, uploadedBytes: file.size }
+                      ? { ...t, status: 'completed' }
                       : t
                   )
                 );
+                delete lastProgressUpdateRef.current[id];
 
                 removeUploadTaskFromDB(id);
                 triggerSuccessCallbacks(roomId);
@@ -620,19 +669,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const currentProgress = Math.min(92, Math.round((loaded / total) * 92));
           const elapsed = (Date.now() - startTime) / 1000;
           const speedFormatted = elapsed > 0 ? `${formatBytes(loaded / elapsed)}/s` : 'Fast';
-
-          setTasks((prev) =>
-            prev.map((t) =>
-              t.id === id
-                ? { ...t, progress: currentProgress, uploadedBytes: loaded, speed: speedFormatted }
-                : t
-            )
-          );
+          updateTaskProgress(id, currentProgress, loaded, speedFormatted, false);
         });
 
-        setTasks((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, progress: 96, speed: 'Finalizing...' } : t))
-        );
+        updateTaskProgress(id, 96, file.size, 'Finalizing...', true);
 
         const checksum = await checksumPromise;
         const completeRes = await fetch('/api/upload/complete', {
@@ -666,13 +706,15 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const elapsedSeconds = (Date.now() - startTime) / 1000;
         const speedFormatted = elapsedSeconds > 0 ? `${formatBytes(file.size / elapsedSeconds)}/s` : 'Done';
 
+        updateTaskProgress(id, 100, file.size, speedFormatted, true);
         setTasks((prev) =>
           prev.map((t) =>
             t.id === id
-              ? { ...t, progress: 100, status: 'completed', speed: speedFormatted, uploadedBytes: file.size }
+              ? { ...t, status: 'completed' }
               : t
           )
         );
+        delete lastProgressUpdateRef.current[id];
 
         removeUploadTaskFromDB(id);
         triggerSuccessCallbacks(roomId);
@@ -697,14 +739,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const currentPercent = Math.min(92, Math.round((totalLoaded / file.size) * 92));
           const elapsed = (Date.now() - startTime) / 1000;
           const speedFormatted = elapsed > 0 ? `${formatBytes(totalLoaded / elapsed)}/s` : 'Fast';
-
-          setTasks((prev) =>
-            prev.map((t) =>
-              t.id === id
-                ? { ...t, progress: currentPercent, uploadedBytes: totalLoaded, speed: speedFormatted }
-                : t
-            )
-          );
+          updateTaskProgress(id, currentPercent, totalLoaded, speedFormatted, false);
         });
       };
 
@@ -715,9 +750,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await Promise.all(batch.map((idx) => uploadChunkIndex(idx)));
       }
 
-      setTasks((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, progress: 96, speed: 'Assembling...' } : t))
-      );
+      updateTaskProgress(id, 96, file.size, 'Assembling...', true);
 
       const checksum = await checksumPromise;
       const completeRes = await fetch('/api/upload/complete', {
@@ -748,18 +781,21 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         throw new Error(errMsg);
       }
 
+      updateTaskProgress(id, 100, file.size, 'Done', true);
       setTasks((prev) =>
         prev.map((t) =>
           t.id === id
-            ? { ...t, progress: 100, status: 'completed', speed: 'Done', uploadedBytes: file.size }
+            ? { ...t, status: 'completed' }
             : t
         )
       );
+      delete lastProgressUpdateRef.current[id];
 
       removeUploadTaskFromDB(id);
       triggerSuccessCallbacks(roomId);
     } catch (err: any) {
       console.error('Fast upload error:', err);
+      delete lastProgressUpdateRef.current[id];
       setTasks((prev) =>
         prev.map((t) => (t.id === id ? { ...t, status: 'failed', error: err.message || 'Upload failed' } : t))
       );
@@ -770,46 +806,55 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const pauseTask = (id: string) => {
     activeUploadsRef.current[id] = false;
+    delete lastProgressUpdateRef.current[id];
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'paused' } : t)));
   };
 
   const resumeTask = (id: string) => {
     const task = tasks.find((t) => t.id === id);
     if (task) {
+      delete lastProgressUpdateRef.current[id];
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'pending', error: undefined } : t)));
     }
   };
 
   const removeTask = (id: string) => {
     activeUploadsRef.current[id] = false;
+    delete lastProgressUpdateRef.current[id];
     cancelSHA256(id);
     removeUploadTaskFromDB(id);
-    setTasks((prev) => prev.filter((t) => t.id !== id));
+    setTasks((prev) => {
+      const target = prev.find((t) => t.id === id);
+      if (target) safeRevokeObjectURL(target.previewUrl);
+      return prev.filter((t) => t.id !== id);
+    });
   };
 
   const clearCompleted = () => {
     clearCompletedTasksFromDB();
-    setTasks((prev) => prev.filter((t) => t.status !== 'completed'));
+    setTasks((prev) => {
+      prev.filter((t) => t.status === 'completed').forEach((t) => safeRevokeObjectURL(t.previewUrl));
+      return prev.filter((t) => t.status !== 'completed');
+    });
   };
 
-  return (
-    <UploadContext.Provider
-      value={{
-        tasks,
-        startUploads,
-        pauseTask,
-        resumeTask,
-        removeTask,
-        clearCompleted,
-        isWidgetOpen,
-        setIsWidgetOpen,
-        activeRoomId,
-        setActiveRoomId,
-      }}
-    >
-      {children}
-    </UploadContext.Provider>
+  const contextValue = React.useMemo(
+    () => ({
+      tasks,
+      startUploads,
+      pauseTask,
+      resumeTask,
+      removeTask,
+      clearCompleted,
+      isWidgetOpen,
+      setIsWidgetOpen,
+      activeRoomId,
+      setActiveRoomId,
+    }),
+    [tasks, isWidgetOpen, activeRoomId]
   );
+
+  return <UploadContext.Provider value={contextValue}>{children}</UploadContext.Provider>;
 };
 
 export const useUpload = () => {
@@ -819,3 +864,4 @@ export const useUpload = () => {
   }
   return context;
 };
+
