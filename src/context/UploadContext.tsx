@@ -55,7 +55,9 @@ interface UploadContextType {
 const UploadContext = createContext<UploadContextType | undefined>(undefined);
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks for optimal streaming throughput
-const MAX_CONCURRENT_UPLOADS = 8;
+const SMALL_FILE_THRESHOLD = 15 * 1024 * 1024; // 15MB threshold for small files / photos pool
+const PHOTO_CONCURRENCY = 5; // Up to 5 small file uploads simultaneously
+const LARGE_FILE_CONCURRENCY = 2; // Up to 2 large file / TUS video uploads simultaneously
 const MAX_CONCURRENT_CHUNKS = 4;
 
 export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -178,15 +180,44 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Process async task queue & OS desktop notifications
+  // Process dual-pool async task queue & OS desktop notifications
   useEffect(() => {
-    const uploadingCount = tasks.filter((t) => t.status === 'uploading').length;
-    if (uploadingCount < MAX_CONCURRENT_UPLOADS) {
-      const pendingTasks = tasks.filter((t) => t.status === 'pending');
-      const slotsAvailable = MAX_CONCURRENT_UPLOADS - uploadingCount;
-      const tasksToStart = pendingTasks.slice(0, slotsAvailable);
+    // Pool 1: Small files / photos (<= 15MB)
+    const smallUploading = tasks.filter(
+      (t) => t.status === 'uploading' && t.file.size <= SMALL_FILE_THRESHOLD
+    );
+    const smallPending = tasks.filter(
+      (t) =>
+        t.status === 'pending' &&
+        t.file.size <= SMALL_FILE_THRESHOLD &&
+        !activeUploadsRef.current[t.id]
+    );
+    const smallSlotsAvailable = PHOTO_CONCURRENCY - smallUploading.length;
 
-      tasksToStart.forEach((task) => {
+    if (smallSlotsAvailable > 0 && smallPending.length > 0) {
+      const smallToStart = smallPending.slice(0, smallSlotsAvailable);
+      smallToStart.forEach((task) => {
+        activeUploadsRef.current[task.id] = true;
+        processFastUpload(task);
+      });
+    }
+
+    // Pool 2: Large files / videos (> 15MB)
+    const largeUploading = tasks.filter(
+      (t) => t.status === 'uploading' && t.file.size > SMALL_FILE_THRESHOLD
+    );
+    const largePending = tasks.filter(
+      (t) =>
+        t.status === 'pending' &&
+        t.file.size > SMALL_FILE_THRESHOLD &&
+        !activeUploadsRef.current[t.id]
+    );
+    const largeSlotsAvailable = LARGE_FILE_CONCURRENCY - largeUploading.length;
+
+    if (largeSlotsAvailable > 0 && largePending.length > 0) {
+      const largeToStart = largePending.slice(0, largeSlotsAvailable);
+      largeToStart.forEach((task) => {
+        activeUploadsRef.current[task.id] = true;
         processFastUpload(task);
       });
     }

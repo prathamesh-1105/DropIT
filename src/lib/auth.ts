@@ -100,6 +100,16 @@ export async function verifyRoomMember(
 ): Promise<AuthResult> {
   const token = extractTokenFromRequest(req, roomIdOrCode, bodyToken);
 
+  if (!token) {
+    return {
+      authenticated: false,
+      member: null,
+      room: null,
+      isOwner: false,
+      error: 'Authentication token is required.',
+    };
+  }
+
   // Retrieve room by code or ID
   let roomData = await supabaseDb.findRoomByCode(roomIdOrCode);
   let room: RoomRecord | null = roomData ? roomData.room : null;
@@ -118,22 +128,22 @@ export async function verifyRoomMember(
     roomData = await supabaseDb.findRoomByCode(room.code);
   }
 
-  // Find member matching room and tokenHash
+  // Find member matching room and tokenHash strictly
   const members = roomData ? roomData.members : await supabaseDb.findMembersByRoomId(room.id);
-  const tokenHash = token ? hashToken(token) : '';
+  const tokenHash = hashToken(token);
 
-  let member = members.find(
-    (m) => m.tokenHash && m.tokenHash === tokenHash
+  const member = members.find(
+    (m) => Boolean(m.tokenHash) && m.tokenHash === tokenHash
   );
 
-  // Fallback 1: match member if members exist
-  if (!member && members.length > 0) {
-    member = members.find((m) => !m.tokenHash) || members[0];
-  }
-
-  // Fallback 2: auto-create member for this room if missing so uploads never fail
   if (!member) {
-    member = await supabaseDb.addMember(room.id, 'Member', tokenHash, 'MEMBER');
+    return {
+      authenticated: false,
+      member: null,
+      room,
+      isOwner: false,
+      error: 'Invalid or unauthorized authentication token.',
+    };
   }
 
   const isOwner = member.role === 'OWNER';
