@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
+import * as tus from 'tus-js-client';
 import { formatBytes } from '@/lib/utils';
 import { calculateSHA256 } from '@/lib/clientChecksum';
 import {
@@ -445,23 +446,94 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (authRes.ok) {
           const authData = await authRes.json();
-          if (authData.useCloud && authData.originalUploadUrl) {
-            const uploadHeaders: Record<string, string> = {
-              'Content-Type': file.type || 'application/octet-stream',
-            };
-            if (authData.originalToken) {
-              uploadHeaders['Authorization'] = `Bearer ${authData.originalToken}`;
+          if (authData.useCloud) {
+            let isUploadSuccess = false;
+
+            // Direct Cloud Single-Shot PUT for files <= 50MB
+            if (file.size <= 50 * 1024 * 1024 && authData.originalUploadUrl) {
+              try {
+                const uploadHeaders: Record<string, string> = {
+                  'Content-Type': file.type || 'application/octet-stream',
+                };
+                if (authData.originalToken) {
+                  uploadHeaders['Authorization'] = `Bearer ${authData.originalToken}`;
+                }
+
+                const uploadRes = await fetch(authData.originalUploadUrl, {
+                  method: 'PUT',
+                  headers: uploadHeaders,
+                  body: file,
+                });
+
+                if (uploadRes.ok) {
+                  isUploadSuccess = true;
+                } else {
+                  console.warn(`Direct Cloud PUT status ${uploadRes.status}, switching to Direct Supabase TUS Resumable stream...`);
+                }
+              } catch (putErr) {
+                console.warn('Direct Cloud PUT error, switching to Direct Supabase TUS Resumable stream:', putErr);
+              }
             }
 
-            const uploadRes = await fetch(authData.originalUploadUrl, {
-              method: 'PUT',
-              headers: uploadHeaders,
-              body: file,
-            });
+            // Direct Supabase TUS Resumable Stream for files > 50MB (or if single-shot PUT returned 413/failed)
+            if (!isUploadSuccess && authData.supabaseUrl) {
+              try {
+                await new Promise<void>((resolve, reject) => {
+                  const endpoint = `${authData.supabaseUrl}/storage/v1/upload/resumable`;
+                  const bearerToken = authData.supabaseServiceKey || authData.supabaseAnonKey;
 
-            if (uploadRes.ok) {
+                  const tusUpload = new tus.Upload(file, {
+                    endpoint,
+                    retryDelays: [0, 1000, 3000, 5000, 10000],
+                    headers: {
+                      authorization: `Bearer ${bearerToken}`,
+                      apikey: authData.supabaseAnonKey || bearerToken,
+                      'x-upsert': 'true',
+                    },
+                    uploadDataDuringCreation: true,
+                    removeFingerprintOnSuccess: true,
+                    metadata: {
+                      bucketName: authData.bucketName || 'dropit-media',
+                      objectName: authData.originalPath,
+                      contentType: file.type || 'application/octet-stream',
+                      cacheControl: '3600',
+                    },
+                    chunkSize: 6 * 1024 * 1024,
+                    onError: (error) => {
+                      console.error('Direct Supabase TUS Upload Error:', error);
+                      reject(error);
+                    },
+                    onProgress: (bytesUploaded, bytesTotal) => {
+                      const currentPercent = Math.min(95, Math.round((bytesUploaded / bytesTotal) * 95));
+                      const elapsed = (Date.now() - startTime) / 1000;
+                      const speedFormatted = elapsed > 0 ? `${formatBytes(bytesUploaded / elapsed)}/s` : 'Direct TUS';
+
+                      setTasks((prev) =>
+                        prev.map((t) =>
+                          t.id === id
+                            ? { ...t, progress: currentPercent, uploadedBytes: bytesUploaded, speed: speedFormatted }
+                            : t
+                        )
+                      );
+                    },
+                    onSuccess: () => {
+                      resolve();
+                    },
+                  });
+
+                  tusUpload.start();
+                });
+
+                isUploadSuccess = true;
+              } catch (tusErr) {
+                console.warn('Direct Supabase TUS stream failed:', tusErr);
+              }
+            }
+
+            // Finalize Direct Cloud Upload via /api/upload/complete
+            if (isUploadSuccess) {
               setTasks((prev) =>
-                prev.map((t) => (t.id === id ? { ...t, progress: 95, speed: 'Completing...' } : t))
+                prev.map((t) => (t.id === id ? { ...t, progress: 98, speed: 'Completing...' } : t))
               );
 
               const checksum = await checksumPromise;

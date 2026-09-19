@@ -55,6 +55,11 @@ export async function POST(req: Request) {
       });
     }
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://qikbkbhskjhxqpazbwpr.supabase.co';
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey;
+    const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'dropit-media';
+
     return NextResponse.json({
       useCloud: true,
       fileId,
@@ -64,6 +69,10 @@ export async function POST(req: Request) {
       originalToken: originalSigned.token,
       previewUploadUrl: previewSigned?.signedUrl || null,
       previewToken: previewSigned?.token || null,
+      supabaseUrl,
+      supabaseAnonKey,
+      supabaseServiceKey,
+      bucketName,
     });
   } catch (err: any) {
     console.error('Error generating upload authorization:', err);
