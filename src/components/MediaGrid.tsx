@@ -34,6 +34,7 @@ interface MediaGridProps {
   members?: MemberSummary[];
   currentMemberId?: string | null;
   onDownloadMemberZip?: (memberId: string, displayName: string) => void;
+  selectedMemberName?: string;
 }
 
 const formatDuration = (seconds?: number) => {
@@ -64,6 +65,7 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
   members = [],
   currentMemberId,
   onDownloadMemberZip,
+  selectedMemberName,
 }) => {
   // Deduplicate tasks: keep optimistic preview visible until saved server items contain the file
   const savedItemKeys = new Set(items.map((i) => `${i.originalFilename}_${i.size}`));
@@ -78,9 +80,15 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
         <div className="w-14 h-14 rounded-2xl bg-[#eee8d2] dark:bg-[#111c36] border border-[#e7dfcd] dark:border-white/15 flex items-center justify-center text-[#060606] dark:text-amber-400 mb-4 shadow-inner">
           <ImageIcon className="w-7 h-7" />
         </div>
-        <h3 className="font-display text-2xl text-[#060606] dark:text-white mb-1">No memories uploaded yet</h3>
+        <h3 className="font-display text-2xl text-[#060606] dark:text-white mb-1">
+          {selectedMemberName
+            ? `${selectedMemberName} hasn't uploaded any memories yet`
+            : 'No memories uploaded yet'}
+        </h3>
         <p className="font-sans text-xs text-slate-600 dark:text-slate-400 max-w-sm">
-          Tap <span className="text-amber-600 dark:text-amber-400 font-bold">+ Add Memories</span> above or drag & drop original photos and videos anywhere on screen.
+          {selectedMemberName
+            ? `When photos or videos are added by ${selectedMemberName}, they will appear right here.`
+            : 'Tap + Add Memories above or drag & drop original photos and videos anywhere on screen.'}
         </p>
       </div>
     );
@@ -354,21 +362,20 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
       group.tasks.push(task);
     });
 
-    // Filter out member groups that have 0 items and 0 tasks
-    const activeGroups = Array.from(memberGroupMap.values()).filter(
-      (g) => g.items.length > 0 || g.tasks.length > 0
-    );
-
-    // Sort groups: current user first, then groups with items
-    activeGroups.sort((a, b) => {
+    // Keep member groups list sorted: current user first, then members with items, then recent joiners
+    const allMemberGroups = Array.from(memberGroupMap.values());
+    allMemberGroups.sort((a, b) => {
       if (a.memberId === currentMemberId) return -1;
       if (b.memberId === currentMemberId) return 1;
-      return b.items.length - a.items.length;
+      const countA = a.items.length + a.tasks.length;
+      const countB = b.items.length + b.tasks.length;
+      if (countA !== countB) return countB - countA;
+      return a.memberName.localeCompare(b.memberName);
     });
 
     return (
       <div className="space-y-8">
-        {activeGroups.map((group) => {
+        {allMemberGroups.map((group) => {
           const isYou = group.memberId === currentMemberId;
           const totalCount = group.items.length + group.tasks.length;
 
@@ -423,11 +430,17 @@ export const MediaGrid: React.FC<MediaGridProps> = ({
                 )}
               </div>
 
-              {/* Member Media Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5">
-                {group.tasks.map((task) => renderOptimisticCard(task))}
-                {group.items.map((item) => renderSavedMediaCard(item))}
-              </div>
+              {/* Member Media Grid or Empty State */}
+              {totalCount > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5">
+                  {group.tasks.map((task) => renderOptimisticCard(task))}
+                  {group.items.map((item) => renderSavedMediaCard(item))}
+                </div>
+              ) : (
+                <div className="py-5 px-4 text-center rounded-2xl bg-[#fff9e9]/50 dark:bg-[#0a0a0f]/50 border border-dashed border-[#e7dfcd] dark:border-white/10 text-xs font-sans text-slate-500 dark:text-slate-400">
+                  <span>No photos or videos uploaded by {group.memberName} yet.</span>
+                </div>
+              )}
             </div>
           );
         })}

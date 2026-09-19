@@ -171,7 +171,9 @@ export default function RoomPage({
   useEffect(() => {
     if (!room?.roomCode) return;
 
-    const eventSource = new EventSource(`/api/rooms/${room.roomCode}/events`);
+    const token = typeof window !== 'undefined' ? localStorage.getItem(`drop_token_${room.roomCode}`) : null;
+    const sseUrl = `/api/rooms/${room.roomCode}/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const eventSource = new EventSource(sseUrl);
 
     eventSource.onmessage = (e) => {
       try {
@@ -707,6 +709,7 @@ export default function RoomPage({
             members={room.members}
             currentMemberId={currentMemberId}
             onDownloadMemberZip={handleDownloadMemberZip}
+            selectedMemberName={selectedMemberObj ? selectedMemberObj.displayName : undefined}
           />
         </div>
       </main>
